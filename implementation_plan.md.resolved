@@ -1,0 +1,36 @@
+# Plan: Fixing Ollama & Getting the AI Working
+
+The assistant's AI relies entirely on the model and provider selected in settings. Currently, if you set the provider to "Ollama" but an error occurs (such as the model not being downloaded, or the background Ollama service not running), the system errors out silently. 
+
+## 1. How Ollama works in ARIA
+1. **Network call**: `core/ai_engine.py` connects to `http://localhost:11434/v1` using the standard OpenAI client. Ollama supports the OpenAI API out of the box.
+2. **Model matching**: The string selected in the `Model` dropdown (e.g. `llama3` or `mistral`) is sent directly to Ollama. **If that exact model tag is not downloaded in your Ollama library**, Ollama throws a `NotFoundError` which crashes the AI generation.
+3. **The current bug**: `VoiceCoordinator` catches this error internally and emits an `error` signal. However, `main.py` **never connects this signal to the UI**. The AI stream quietly dies and the overlay just spins forever.
+
+## 2. Proposed Changes
+
+We will wire the error pipeline properly so the AI never silently fails. 
+
+### [MODIFY] `main.py`
+We will hook up the `voice.error` signal to both the Overlay and the Dashboard so you receive immediate visual feedback.
+```python
+# Route AI/Voice errors to the overlay text and dashboard 
+voice.error.connect(lambda msg: overlay._on_err(msg))
+voice.error.connect(lambda msg: panel._dashboard.append_token(f"\n[ERROR] {msg}\n"))
+```
+
+### [MODIFY] `ui/styles.py` and `ui/overlay.py`
+We'll ensure error states (`_on_err`) display in a readable, bright color (like red `ef4444`) on the overlay instead of getting buried.
+
+## 3. Walkthrough: How to implement & use Ollama properly
+
+> [!IMPORTANT]
+> Since we run Ollama locally, you are entirely responsible for providing the models to the engine.
+
+1. **Start the Ollama daemon**: Make sure the Ollama app is running in your system tray. 
+2. **Pull the model**: Open your command prompt (Terminal) and run `ollama run llama3` (or `mistral`, `phi3`, etc. depending on which one you want to use). Let it download 100%. 
+3. **Match the names**: Go to ARIA's **Settings > General**, select **Ollama**, and type the exact name you just pulled (e.g., `llama3`) into the Model field.
+4. **Test**: Type "Hello" into the floating overlay (or trigger the mic) and the dashboard/overlay will now display the response (or instantly throw a red error explaining exactly what failed).
+
+## User Review Required
+Does this clarify how the AI engine is configured, and do you approve wiring the error pipelines so that Ollama errors become visible in the UI? Once approved, I'll execute the code changes.

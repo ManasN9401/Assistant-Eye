@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pricing — NovaSuite</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f9f9fb;--bg2:#f0f0f5;--surface:#fff;--border:#e4e4ec;--text:#1a1a2e;--text2:#5a5a7a;--accent:#4f46e5;--green:#059669;--red:#dc2626;--amber:#d97706; }
+  [data-theme="dark"] { --bg:#0d0d14;--bg2:#141420;--surface:#1a1a28;--border:#2a2a40;--text:#e8e8f0;--text2:#8888aa;--accent:#6366f1; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); }
+  nav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 40px; display:flex; align-items:center; height:60px; }
+  .nav-logo { font-size:18px; font-weight:600; color:var(--accent); margin-right:40px; }
+  .nav-links { display:flex; gap:28px; flex:1; }
+  .nav-links a { text-decoration:none; color:var(--text2); font-size:14px; }
+  .nav-links a:hover { color:var(--text); }
+  .btn { padding:8px 18px; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; border:none; font-family:inherit; }
+  .btn-primary { background:var(--accent); color:white; }
+  .theme-btn { background:var(--bg2); border:1px solid var(--border); border-radius:20px; padding:5px 12px; cursor:pointer; font-size:12px; color:var(--text2); }
+
+  /* Header */
+  .page-header { padding:60px 40px 40px; text-align:center; }
+  .page-header h1 { font-size:42px; font-weight:600; letter-spacing:-1px; margin-bottom:12px; }
+  .page-header p { color:var(--text2); font-size:16px; }
+
+  /* Toggle annual/monthly */
+  .billing-toggle { display:flex; align-items:center; justify-content:center; gap:12px; margin:24px 0; font-size:14px; }
+  .toggle-switch { width:44px; height:24px; background:var(--accent); border-radius:12px; position:relative; cursor:pointer; }
+  .toggle-switch::after { content:''; position:absolute; width:18px; height:18px; background:white; border-radius:50%; top:3px; left:3px; transition:0.2s; }
+  .toggle-switch.monthly::after { left:23px; }
+  .save-badge { background:#dcfce7; color:#166534; font-size:11px; padding:3px 8px; border-radius:10px; font-weight:500; }
+
+  /* Plan cards */
+  .plans { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; max-width:1200px; margin:0 auto 60px; padding:0 40px; }
+  .plan-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:24px; position:relative; }
+  .plan-card.featured { border-color:var(--accent); border-width:2px; }
+  .featured-badge { position:absolute; top:-12px; left:50%; transform:translateX(-50%); background:var(--accent); color:white; font-size:11px; padding:3px 12px; border-radius:10px; white-space:nowrap; }
+  .plan-name { font-weight:600; font-size:15px; margin-bottom:6px; }
+  .plan-price { font-size:32px; font-weight:600; color:var(--accent); margin-bottom:4px; }
+  .plan-price sub { font-size:14px; color:var(--text2); }
+  .plan-note { font-size:11px; color:var(--text2); margin-bottom:20px; font-family:'DM Mono',monospace; }
+  .plan-cta { width:100%; padding:10px; background:var(--accent); color:white; border:none; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; font-family:inherit; margin-bottom:20px; }
+  .plan-cta.ghost { background:transparent; border:1px solid var(--border); color:var(--text2); }
+  .plan-feature { font-size:12px; color:var(--text2); padding:5px 0; display:flex; gap:8px; }
+  .plan-feature::before { content:'✓'; color:var(--green); flex-shrink:0; }
+
+  /* The big comparison table */
+  .comparison { max-width:1200px; margin:0 auto 80px; padding:0 40px; }
+  .comparison h2 { font-size:26px; font-weight:600; margin-bottom:8px; }
+  .comparison p.sub { color:var(--text2); font-size:14px; margin-bottom:28px; }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { padding:14px 16px; text-align:center; font-weight:600; font-size:12px; color:var(--text2); border-bottom:2px solid var(--border); position:sticky; top:60px; background:var(--bg); z-index:10; }
+  thead th:first-child { text-align:left; }
+  thead th.col-featured { color:var(--accent); }
+  tbody tr:hover td { background:var(--bg2); }
+  td { padding:12px 16px; border-bottom:1px solid var(--border); text-align:center; color:var(--text2); }
+  td:first-child { text-align:left; color:var(--text); font-weight:500; }
+  .check { color:var(--green); font-size:14px; }
+  .cross { color:var(--red); opacity:0.4; }
+  .partial { color:var(--amber); font-size:11px; font-family:'DM Mono',monospace; }
+  .section-row td { background:var(--bg2); font-size:11px; font-weight:600; letter-spacing:1px; color:var(--text2); text-transform:uppercase; padding:10px 16px; }
+
+  /* Fine print — deliberately dense -->
+  .fine-print { max-width:1200px; margin:0 auto; padding:0 40px 80px; }
+  .fine-print h3 { font-size:16px; font-weight:600; margin-bottom:12px; }
+  .fine-print p, .fine-print li { font-size:12px; color:var(--text2); line-height:1.8; }
+  .fine-print ul { padding-left:20px; margin-bottom:16px; }
+  .accordion { border:1px solid var(--border); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+  .accordion-header { padding:14px 16px; cursor:pointer; display:flex; justify-content:space-between; font-size:14px; font-weight:500; background:var(--surface); }
+  .accordion-body { padding:14px 16px; font-size:13px; color:var(--text2); line-height:1.7; display:none; background:var(--bg2); }
+  .accordion.open .accordion-body { display:block; }
+  .accordion.open .accordion-header::after { content:'▲'; }
+  .accordion-header::after { content:'▼'; font-size:10px; color:var(--text2); }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-logo">NovaSuite</div>
+  <div class="nav-links">
+    <a href="../index.html">Home</a>
+    <a href="pricing.html" style="color:var(--accent)">Pricing</a>
+    <a href="docs.html">Docs</a>
+  </div>
+  <div style="display:flex;gap:12px;align-items:center">
+    <button class="theme-btn" onclick="window.__aria?.toggleDark()">☀ / ☾</button>
+    <button class="btn btn-primary">Start free</button>
+  </div>
+</nav>
+
+<div class="page-header">
+  <h1>Choose your plan</h1>
+  <p>All plans include a 14-day free trial. No credit card required.</p>
+  <div class="billing-toggle">
+    <span>Monthly</span>
+    <div class="toggle-switch monthly" id="billing-toggle" onclick="toggleBilling()"></div>
+    <span>Annual</span>
+    <span class="save-badge">Save up to 20%</span>
+  </div>
+  <p style="font-size:12px;color:var(--text2)" id="billing-note">Showing annual pricing (billed yearly)</p>
+</div>
+
+<!-- Plan cards -->
+<div class="plans">
+  <div class="plan-card">
+    <div class="plan-name">Starter</div>
+    <div class="plan-price" id="price-starter">Free<sub></sub></div>
+    <div class="plan-note">Forever free · 3 projects</div>
+    <button class="plan-cta ghost">Get started</button>
+    <div class="plan-feature">Up to 5 team members</div>
+    <div class="plan-feature">3 active projects</div>
+    <div class="plan-feature">500MB storage</div>
+    <div class="plan-feature">Basic task management</div>
+    <div class="plan-feature">Community support</div>
+  </div>
+  <div class="plan-card featured">
+    <div class="featured-badge">Most popular</div>
+    <div class="plan-name">Pro</div>
+    <div class="plan-price" id="price-pro">$15<sub>/mo/user</sub></div>
+    <div class="plan-note" id="note-pro">$180/user/year billed annually</div>
+    <button class="plan-cta">Start Pro trial</button>
+    <div class="plan-feature">Unlimited team members</div>
+    <div class="plan-feature">Unlimited projects</div>
+    <div class="plan-feature">20GB storage</div>
+    <div class="plan-feature">AI task summarisation</div>
+    <div class="plan-feature">Integrations (12)</div>
+    <div class="plan-feature">Priority email support</div>
+  </div>
+  <div class="plan-card">
+    <div class="plan-name">Business</div>
+    <div class="plan-price" id="price-biz">$39<sub>/mo/user</sub></div>
+    <div class="plan-note" id="note-biz">$468/user/year billed annually</div>
+    <button class="plan-cta">Start Business trial</button>
+    <div class="plan-feature">Everything in Pro</div>
+    <div class="plan-feature">100GB storage</div>
+    <div class="plan-feature">Advanced analytics</div>
+    <div class="plan-feature">Custom workflows</div>
+    <div class="plan-feature">SSO / SAML</div>
+    <div class="plan-feature">SLA 99.9% uptime</div>
+    <div class="plan-feature">Dedicated CSM</div>
+  </div>
+  <div class="plan-card">
+    <div class="plan-name">Enterprise</div>
+    <div class="plan-price">Custom</div>
+    <div class="plan-note">Minimum 25 seats</div>
+    <button class="plan-cta ghost">Contact sales</button>
+    <div class="plan-feature">Everything in Business</div>
+    <div class="plan-feature">Unlimited storage</div>
+    <div class="plan-feature">Custom data residency</div>
+    <div class="plan-feature">Audit logs (7yr)</div>
+    <div class="plan-feature">On-prem option</div>
+    <div class="plan-feature">99.99% SLA</div>
+    <div class="plan-feature">24/7 phone support</div>
+    <div class="plan-feature">Custom MSA</div>
+  </div>
+</div>
+
+<!-- Massive feature comparison table -->
+<div class="comparison">
+  <h2>Full feature comparison</h2>
+  <p class="sub">All the details. Every plan. Every feature. (This is the part ARIA really helps with.)</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:300px">Feature</th>
+          <th>Starter</th>
+          <th class="col-featured">Pro</th>
+          <th>Business</th>
+          <th>Enterprise</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="section-row"><td colspan="5">Core project management</td></tr>
+        <tr><td>Active projects</td><td>3</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Team members</td><td>5</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Task boards (Kanban)</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>List view</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Timeline / Gantt</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Calendar view</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Subtasks (depth)</td><td class="partial">2 levels</td><td class="partial">5 levels</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Custom fields</td><td class="cross">✗</td><td class="partial">10 per project</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Task dependencies</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Recurring tasks</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Time tracking</td><td class="cross">✗</td><td class="partial">Manual only</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Workload view</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td></tr>
+
+        <tr class="section-row"><td colspan="5">Docs & knowledge</td></tr>
+        <tr><td>Pages / wiki</td><td class="partial">50 pages</td><td class="partial">500 pages</td><td class="partial">Unlimited</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Storage</td><td class="partial">500 MB</td><td class="partial">20 GB</td><td class="partial">100 GB</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Code blocks</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Embeds (Figma, YouTube)</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Version history</td><td class="cross">✗</td><td class="partial">30 days</td><td class="partial">1 year</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Public doc sharing</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+
+        <tr class="section-row"><td colspan="5">AI features</td></tr>
+        <tr><td>AI task summarisation</td><td class="cross">✗</td><td class="partial">100/mo</td><td class="partial">1,000/mo</td><td class="partial">Unlimited</td></tr>
+        <tr><td>AI meeting notes</td><td class="cross">✗</td><td class="cross">✗</td><td class="partial">Beta</td><td class="check">✓</td></tr>
+        <tr><td>AI blocker detection</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Custom AI workflows</td><td class="cross">✗</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td></tr>
+
+        <tr class="section-row"><td colspan="5">Integrations</td></tr>
+        <tr><td>GitHub / GitLab</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Slack</td><td class="partial">Notifications only</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Jira sync</td><td class="cross">✗</td><td class="partial">One-way</td><td class="partial">Two-way</td><td class="partial">Two-way + custom</td></tr>
+        <tr><td>Zapier / Make</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>REST API</td><td class="cross">✗</td><td class="partial">1,000 req/day</td><td class="partial">50,000 req/day</td><td class="partial">Unlimited</td></tr>
+        <tr><td>Webhooks</td><td class="cross">✗</td><td class="partial">5</td><td class="partial">50</td><td class="partial">Unlimited</td></tr>
+
+        <tr class="section-row"><td colspan="5">Security & compliance</td></tr>
+        <tr><td>SSO / SAML 2.0</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>2FA enforcement</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Audit logs</td><td class="cross">✗</td><td class="partial">30 days</td><td class="partial">1 year</td><td class="partial">7 years</td></tr>
+        <tr><td>Data residency</td><td class="cross">✗</td><td class="cross">✗</td><td class="partial">EU or US</td><td class="partial">Custom</td></tr>
+        <tr><td>SOC 2 Type II</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>HIPAA BAA</td><td class="cross">✗</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td></tr>
+        <tr><td>Pen test reports</td><td class="cross">✗</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td></tr>
+
+        <tr class="section-row"><td colspan="5">Support</td></tr>
+        <tr><td>Community forum</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Email support</td><td class="cross">✗</td><td class="partial">48hr SLA</td><td class="partial">8hr SLA</td><td class="partial">2hr SLA</td></tr>
+        <tr><td>Live chat</td><td class="cross">✗</td><td class="cross">✗</td><td class="check">✓</td><td class="check">✓</td></tr>
+        <tr><td>Phone / dedicated CSM</td><td class="cross">✗</td><td class="cross">✗</td><td class="partial">CSM only</td><td class="check">✓</td></tr>
+        <tr><td>Onboarding sessions</td><td class="cross">✗</td><td class="cross">✗</td><td class="partial">2 sessions</td><td class="partial">Unlimited</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Fine print FAQ -->
+<div class="fine-print">
+  <h3>Frequently asked questions</h3>
+  <div class="accordion" onclick="this.classList.toggle('open')">
+    <div class="accordion-header">What counts as a "user" for billing purposes?</div>
+    <div class="accordion-body">A user is any person who can log in to your NovaSuite workspace, including admins, members, and guests with edit access. Read-only guests are free. Billing is per seat, per month, charged to the workspace owner. Users added mid-cycle are prorated. Users removed mid-cycle receive credit toward the next invoice. Guest accounts with comment-only access do not count as seats on Pro and above, but do on Starter.</div>
+  </div>
+  <div class="accordion" onclick="this.classList.toggle('open')">
+    <div class="accordion-header">Can I mix plans across team members?</div>
+    <div class="accordion-body">No. All members of a workspace share the same plan tier. If you need different access levels, you can use multiple workspaces. Note that projects cannot be shared across workspaces without an Enterprise plan and the cross-workspace feature add-on ($12/user/month).</div>
+  </div>
+  <div class="accordion" onclick="this.classList.toggle('open')">
+    <div class="accordion-header">How does the annual discount work?</div>
+    <div class="accordion-body">Annual plans are billed as a single upfront payment for 12 months. The discount is applied to the per-user-per-month rate. Pro annual is $15/user/month (vs $18 monthly). Business annual is $39/user/month (vs $49 monthly). Refunds for annual plans are available within 30 days of purchase. After 30 days, a prorated credit is issued for unused months.</div>
+  </div>
+  <div class="accordion" onclick="this.classList.toggle('open')">
+    <div class="accordion-header">What happens when I exceed storage?</div>
+    <div class="accordion-body">You'll receive email warnings at 80% and 95% of your storage limit. On Starter, uploads are blocked at 100%. On paid plans, you can purchase additional storage in 50GB increments for $8/month. Existing files are never deleted automatically — you'll just be unable to upload new files until storage is expanded or existing files are removed.</div>
+  </div>
+  <div class="accordion" onclick="this.classList.toggle('open')">
+    <div class="accordion-header">Is there a non-profit or educational discount?</div>
+    <div class="accordion-body">Yes. Verified non-profits and educational institutions receive 50% off Pro and Business plans. Enterprise pricing for qualifying organizations is negotiated separately. Contact our team with your organization's documentation to apply. Processing typically takes 5–7 business days.</div>
+  </div>
+</div>
+
+<script>
+  let isAnnual = true;
+  const prices = {
+    annual: { pro: '$15', biz: '$39', notePro: '$180/user/year billed annually', noteBiz: '$468/user/year billed annually' },
+    monthly: { pro: '$18', biz: '$49', notePro: 'Billed monthly · no commitment', noteBiz: 'Billed monthly · no commitment' }
+  };
+  function toggleBilling() {
+    isAnnual = !isAnnual;
+    const t = isAnnual ? 'annual' : 'monthly';
+    document.getElementById('price-pro').innerHTML = prices[t].pro + '<sub>/mo/user</sub>';
+    document.getElementById('price-biz').innerHTML = prices[t].biz + '<sub>/mo/user</sub>';
+    document.getElementById('note-pro').textContent = prices[t].notePro;
+    document.getElementById('note-biz').textContent = prices[t].noteBiz;
+    document.getElementById('billing-note').textContent = isAnnual ? 'Showing annual pricing (billed yearly)' : 'Showing monthly pricing';
+    document.getElementById('billing-toggle').classList.toggle('monthly', !isAnnual);
+  }
+  window.__aria = { toggleDark: () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; } };
+</script>
+</body>
+</html>

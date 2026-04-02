@@ -1,0 +1,26 @@
+PyQt6>=6.6.0
+PyQt6-Qt6>=6.6.0
+openai>=1.30.0
+anthropic>=0.28.0
+playwright>=1.44.0
+requests>=2.31.0
+keyboard>=0.13.5
+websockets>=12.0
+python-dotenv>=1.0.0
+
+# Phase 2 — Voice
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.26.0
+faster-whisper>=1.0.0     # local Whisper STT (runs on CPU)
+pyttsx3>=2.90             # offline TTS engine
+elevenlabs>=1.2.0         # optional cloud TTS
+pvporcupine>=3.0.0        # wake word (needs free Picovoice key)
+vosk>=0.3.45              # fallback offline wake word (no key needed)
+
+# Phase 3 — Visual input
+opencv-python>=4.9.0
+mediapipe>=0.10.9
+onnxruntime>=1.17.0         # for ASL fingerspelling model
+pyautogui>=0.9.54           # cursor control fallback (Linux)
+python-xlib>=0.33           # cursor control on Linux/X11 (preferred)

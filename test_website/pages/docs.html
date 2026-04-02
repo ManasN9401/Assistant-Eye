@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documentation — NovaSuite</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f9f9fb;--bg2:#f0f0f5;--surface:#fff;--border:#e4e4ec;--text:#1a1a2e;--text2:#5a5a7a;--accent:#4f46e5;--green:#059669;--amber:#d97706;--code-bg:#1e1e2e; }
+  [data-theme="dark"] { --bg:#0d0d14;--bg2:#141420;--surface:#1a1a28;--border:#2a2a40;--text:#e8e8f0;--text2:#8888aa;--accent:#6366f1; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); }
+  nav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 40px; display:flex; align-items:center; height:60px; }
+  .nav-logo { font-size:18px; font-weight:600; color:var(--accent); margin-right:40px; }
+  .nav-links { display:flex; gap:28px; flex:1; }
+  .nav-links a { text-decoration:none; color:var(--text2); font-size:14px; }
+  .theme-btn { background:var(--bg2); border:1px solid var(--border); border-radius:20px; padding:5px 12px; cursor:pointer; font-size:12px; color:var(--text2); }
+
+  .docs-layout { display:flex; min-height:calc(100vh - 60px); }
+
+  /* Left sidebar */
+  .docs-nav { width:260px; flex-shrink:0; border-right:1px solid var(--border); padding:24px 0; position:sticky; top:60px; height:calc(100vh - 60px); overflow-y:auto; background:var(--surface); }
+  .docs-nav-section { font-size:10px; font-weight:600; letter-spacing:1.5px; color:var(--text2); text-transform:uppercase; padding:14px 20px 6px; margin-top:8px; }
+  .docs-nav a { display:block; padding:7px 20px; font-size:13px; color:var(--text2); text-decoration:none; border-left:2px solid transparent; transition:0.15s; }
+  .docs-nav a:hover { color:var(--text); background:var(--bg2); }
+  .docs-nav a.active { color:var(--accent); border-left-color:var(--accent); background:var(--bg2); }
+  .docs-nav a.sub { padding-left:32px; font-size:12px; }
+
+  /* Search bar (non-functional, deliberately awkward) */
+  .docs-search { padding:0 16px 16px; }
+  .docs-search input { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13px; font-family:inherit; }
+  .docs-search input::placeholder { color:var(--text2); }
+  .search-note { font-size:10px; color:var(--text2); margin-top:6px; font-family:'DM Mono',monospace; }
+
+  /* Content */
+  .docs-content { flex:1; padding:40px 60px; max-width:860px; }
+  .docs-content h1 { font-size:32px; font-weight:600; letter-spacing:-0.5px; margin-bottom:10px; }
+  .docs-content h2 { font-size:22px; font-weight:600; margin:36px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+  .docs-content h3 { font-size:16px; font-weight:600; margin:24px 0 8px; }
+  .docs-content p { font-size:14px; color:var(--text2); line-height:1.8; margin-bottom:14px; }
+  .docs-content ul, .docs-content ol { font-size:14px; color:var(--text2); padding-left:20px; margin-bottom:14px; line-height:1.8; }
+  .docs-content li { margin-bottom:4px; }
+  .breadcrumb { font-size:12px; color:var(--text2); margin-bottom:20px; font-family:'DM Mono',monospace; }
+  .breadcrumb a { color:var(--accent); text-decoration:none; }
+  .updated { font-size:11px; color:var(--text2); margin-bottom:32px; font-family:'DM Mono',monospace; }
+
+  /* Code blocks */
+  pre { background:var(--code-bg); border-radius:10px; padding:20px; margin:16px 0; overflow-x:auto; border:1px solid #2a2a40; }
+  code { font-family:'DM Mono',monospace; font-size:12px; color:#cdd6f4; }
+  p code, li code { background:var(--bg2); padding:2px 6px; border-radius:4px; font-size:12px; color:var(--accent); font-family:'DM Mono',monospace; border:1px solid var(--border); }
+
+  /* Callout boxes */
+  .callout { border-radius:8px; padding:14px 18px; margin:16px 0; font-size:13px; line-height:1.7; }
+  .callout.info { background:#eff6ff; border-left:4px solid #3b82f6; color:#1e40af; }
+  .callout.warn { background:#fffbeb; border-left:4px solid var(--amber); color:#92400e; }
+  .callout.tip  { background:#f0fdf4; border-left:4px solid var(--green); color:#166534; }
+  [data-theme="dark"] .callout.info { background:#172554; color:#93c5fd; }
+  [data-theme="dark"] .callout.warn { background:#1c1407; color:#fcd34d; }
+  [data-theme="dark"] .callout.tip  { background:#052e16; color:#86efac; }
+
+  /* On-this-page */
+  .on-this-page { width:200px; flex-shrink:0; padding:40px 20px; position:sticky; top:60px; height:calc(100vh - 60px); overflow-y:auto; }
+  .on-this-page h4 { font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--text2); margin-bottom:12px; }
+  .on-this-page a { display:block; font-size:12px; color:var(--text2); text-decoration:none; padding:4px 0; border-left:2px solid var(--border); padding-left:10px; transition:0.15s; }
+  .on-this-page a:hover { color:var(--text); border-left-color:var(--accent); }
+
+  /* Version badge */
+  .version-badge { display:inline-block; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:11px; font-family:'DM Mono',monospace; color:var(--text2); margin-left:10px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-logo">NovaSuite</div>
+  <div class="nav-links">
+    <a href="../index.html">Home</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="docs.html" style="color:var(--accent)">Docs</a>
+  </div>
+  <div style="display:flex;gap:12px;align-items:center">
+    <button class="theme-btn" onclick="window.__aria?.toggleDark()">☀ / ☾</button>
+  </div>
+</nav>
+
+<div class="docs-layout">
+  <!-- Left nav -->
+  <nav class="docs-nav">
+    <div class="docs-search">
+      <input type="text" placeholder="Search docs… (Ctrl+K)" id="search-input">
+      <div class="search-note">⚠ Search indexes rebuild nightly.</div>
+    </div>
+    <div class="docs-nav-section">Getting started</div>
+    <a href="#" class="active">Quick start</a>
+    <a href="#">Installation</a>
+    <a href="#" class="sub">System requirements</a>
+    <a href="#" class="sub">Docker setup</a>
+    <a href="#" class="sub">SSO configuration</a>
+    <a href="#">Your first project</a>
+    <a href="#">Invite team members</a>
+
+    <div class="docs-nav-section">Tasks & Projects</div>
+    <a href="#">Task model</a>
+    <a href="#" class="sub">Fields & types</a>
+    <a href="#" class="sub">Statuses</a>
+    <a href="#" class="sub">Priorities</a>
+    <a href="#">Views</a>
+    <a href="#" class="sub">Board</a>
+    <a href="#" class="sub">List</a>
+    <a href="#" class="sub">Timeline</a>
+    <a href="#" class="sub">Workload</a>
+    <a href="#">Automations</a>
+    <a href="#" class="sub">Triggers</a>
+    <a href="#" class="sub">Actions</a>
+    <a href="#" class="sub">Conditions</a>
+
+    <div class="docs-nav-section">API Reference</div>
+    <a href="#">Authentication</a>
+    <a href="#" class="sub">OAuth 2.0</a>
+    <a href="#" class="sub">API keys</a>
+    <a href="#">Endpoints</a>
+    <a href="#" class="sub">Tasks</a>
+    <a href="#" class="sub">Projects</a>
+    <a href="#" class="sub">Members</a>
+    <a href="#" class="sub">Webhooks</a>
+    <a href="#" class="sub">Rate limits</a>
+    <a href="#">SDKs</a>
+    <a href="#" class="sub">Python SDK</a>
+    <a href="#" class="sub">Node.js SDK</a>
+    <a href="#" class="sub">Go SDK</a>
+
+    <div class="docs-nav-section">Integrations</div>
+    <a href="#">GitHub</a>
+    <a href="#">Slack</a>
+    <a href="#">Jira</a>
+    <a href="#">Figma</a>
+    <a href="#">Zapier</a>
+    <a href="#">Webhooks</a>
+
+    <div class="docs-nav-section">Security</div>
+    <a href="#">SSO / SAML</a>
+    <a href="#">Audit logs</a>
+    <a href="#">Data residency</a>
+    <a href="#">IP allowlist</a>
+    <a href="#">Compliance</a>
+    <a href="#" class="sub">SOC 2</a>
+    <a href="#" class="sub">GDPR</a>
+    <a href="#" class="sub">HIPAA</a>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-content">
+    <div class="breadcrumb"><a href="#">Docs</a> › Getting started › Quick start</div>
+    <h1>Quick start <span class="version-badge">v3.2</span></h1>
+    <div class="updated">Last updated: 14 May 2025 · 18 min read</div>
+
+    <p>This guide walks you through creating your first NovaSuite workspace, inviting your team, and shipping your first project — from zero to shipped in under 30 minutes.</p>
+
+    <div class="callout info">
+      <strong>Prerequisites:</strong> A NovaSuite account (free tier works), Node.js 18+ if using the CLI, and basic familiarity with project management concepts.
+    </div>
+
+    <h2 id="installation">1. Installation</h2>
+    <p>NovaSuite is primarily a web application, but the CLI is required for local development integrations, webhook forwarding, and the VS Code extension backend.</p>
+
+    <h3>Install the CLI</h3>
+<pre><code># Via npm (recommended)
+npm install -g @novasuite/cli
+
+# Via pip (Python users)
+pip install novasuite-cli
+
+# Verify installation
+nova --version
+# → novasuite-cli 3.2.4</code></pre>
+
+    <div class="callout warn">
+      <strong>Windows users:</strong> Run your terminal as Administrator for the first install. WSL2 is supported but requires the <code>--wsl</code> flag on all subsequent commands.
+    </div>
+
+    <h3>Authenticate</h3>
+<pre><code>nova auth login
+# Opens browser → confirm in NovaSuite → returns token
+# Token stored at ~/.novasuite/credentials.json
+
+# For CI environments, use a service account token:
+nova auth login --token $NOVA_SERVICE_TOKEN</code></pre>
+
+    <h2 id="workspace">2. Create a workspace</h2>
+    <p>A workspace is the top-level container for your organisation. Projects, members, billing, and integrations all live inside a workspace. You can belong to multiple workspaces.</p>
+
+<pre><code>nova workspace create "Acme Corp" --slug acme --region eu-west-1
+# Output:
+# ✓ Workspace created: acme (ID: ws_8f3kd92)
+# ✓ You are the workspace owner
+# ✓ Dashboard: https://app.novasuite.io/acme</code></pre>
+
+    <div class="callout tip">
+      <strong>Tip:</strong> Choose your region carefully — data residency is locked at workspace creation and can only be changed on the Enterprise plan. Available regions: <code>us-east-1</code>, <code>eu-west-1</code>, <code>ap-southeast-1</code>.
+    </div>
+
+    <h2 id="first-project">3. Your first project</h2>
+    <p>Projects organise work around a goal, product, or team. Each project has its own task lists, docs, timelines, and settings. Projects can be public (visible to all workspace members) or private (invite-only).</p>
+
+<pre><code>nova project create "Website Redesign" \
+  --workspace acme \
+  --template software-development \
+  --visibility private
+
+# List available templates:
+nova project templates list</code></pre>
+
+    <h3>Templates available</h3>
+    <ul>
+      <li><code>blank</code> — empty project, no predefined statuses</li>
+      <li><code>software-development</code> — Backlog, In Progress, In Review, Done</li>
+      <li><code>marketing-campaign</code> — Ideation, Planning, Execution, Reporting</li>
+      <li><code>bug-tracker</code> — Triage, Confirmed, In Progress, Fixed, Closed</li>
+      <li><code>okr-planning</code> — Objectives and key results with scoring</li>
+      <li><code>sprint</code> — Two-week sprints with velocity tracking</li>
+    </ul>
+
+    <h2 id="tasks">4. Creating tasks</h2>
+    <p>Tasks are the core unit of work. Every task has a title, status, assignee, due date, and optional custom fields defined by your project template. Tasks support markdown in descriptions, file attachments up to 100MB, and threaded comments.</p>
+
+<pre><code># Create a task via CLI
+nova task create \
+  --project ws_8f3kd92/website-redesign \
+  --title "Design new homepage hero" \
+  --assignee alice@acme.com \
+  --due 2025-06-30 \
+  --priority high \
+  --status "In Progress"
+
+# Or use the API directly:
+curl -X POST https://api.novasuite.io/v1/tasks \
+  -H "Authorization: Bearer $NOVA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "proj_4x8w12",
+    "title": "Design new homepage hero",
+    "assignee_id": "usr_alice",
+    "due_date": "2025-06-30",
+    "priority": "high",
+    "status": "in_progress"
+  }'</code></pre>
+
+    <h2 id="integrations">5. Connect GitHub</h2>
+    <p>The GitHub integration enables two-way sync between NovaSuite tasks and GitHub issues and pull requests. When a PR is opened referencing a task ID (e.g. <code>NOVA-142</code>), the task automatically transitions to "In Review".</p>
+
+<pre><code># Authorise GitHub integration from the CLI:
+nova integration connect github --workspace acme
+
+# Map a GitHub repo to a NovaSuite project:
+nova integration github link \
+  --repo acme-org/website \
+  --project website-redesign \
+  --sync-direction bidirectional</code></pre>
+
+    <div class="callout warn">
+      <strong>Note:</strong> Bidirectional sync requires the GitHub app to be installed on your organisation, not just your personal account. The authorising user must be a GitHub org admin. If you're on the Pro plan, only one-directional sync is available (GitHub → NovaSuite).
+    </div>
+
+    <h2 id="webhooks">6. Webhooks</h2>
+    <p>Webhooks allow external services to be notified of events inside NovaSuite. Each workspace can have up to 5 webhooks on Pro, 50 on Business, and unlimited on Enterprise. Events are delivered within 30 seconds, with automatic retries at 1m, 5m, 15m, and 1h intervals.</p>
+
+<pre><code># Register a webhook
+nova webhook create \
+  --workspace acme \
+  --url https://your-service.example.com/nova-webhook \
+  --secret $WEBHOOK_SECRET \
+  --events task.created,task.updated,task.completed,comment.created
+
+# Webhook payload example (task.completed):
+{
+  "event": "task.completed",
+  "timestamp": "2025-05-14T10:32:44Z",
+  "workspace_id": "ws_8f3kd92",
+  "actor": { "id": "usr_alice", "email": "alice@acme.com" },
+  "data": {
+    "task_id": "task_19xk22",
+    "title": "Design new homepage hero",
+    "completed_at": "2025-05-14T10:32:44Z",
+    "project_id": "proj_4x8w12"
+  }
+}</code></pre>
+
+    <h2 id="api-rate-limits">7. API rate limits</h2>
+    <p>Rate limits are enforced per API token, not per IP. Exceeding a limit returns a <code>429 Too Many Requests</code> response with a <code>Retry-After</code> header.</p>
+    <ul>
+      <li><strong>Pro:</strong> 1,000 requests per day, burst of 60 per minute</li>
+      <li><strong>Business:</strong> 50,000 requests per day, burst of 600 per minute</li>
+      <li><strong>Enterprise:</strong> Unlimited (fair use policy applies)</li>
+    </ul>
+    <p>Use the <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code> headers to manage your usage. The Python SDK handles retries and backoff automatically.</p>
+
+    <h2 id="troubleshooting">8. Common issues</h2>
+
+    <h3>CLI auth fails silently</h3>
+    <p>If <code>nova auth login</code> opens a browser tab but never returns a success message, your firewall may be blocking the local callback on port 9876. Use the <code>--no-browser</code> flag and paste the authorization code manually:</p>
+<pre><code>nova auth login --no-browser
+# → Visit: https://app.novasuite.io/cli-auth?code=...
+# → Paste the code when prompted:</code></pre>
+
+    <h3>Webhook deliveries failing</h3>
+    <p>Check the delivery log in Workspace Settings → Integrations → Webhooks → Delivery History. A 401 from your endpoint usually means the <code>X-Nova-Signature</code> header validation is failing. Ensure you're computing the HMAC-SHA256 over the raw request body (not the parsed JSON) using your webhook secret.</p>
+
+    <h3>Task sync loops with Jira</h3>
+    <p>If you have both the Jira integration and the GitHub integration active, and your Jira project also has a GitHub integration, you may experience sync loops where a status update triggers both systems to update each other. Add <code>nova-sync-skip</code> to the Jira issue labels to prevent NovaSuite from processing events originating from Jira.</p>
+
+    <div class="callout info">
+      <strong>Need more help?</strong> Search the docs above, or ask <strong>ARIA</strong> — the assistant can search through all NovaSuite documentation and give you direct answers. Much faster than reading all of this manually.
+    </div>
+  </main>
+
+  <!-- Right sidebar — on this page -->
+  <aside class="on-this-page">
+    <h4>On this page</h4>
+    <a href="#installation">Installation</a>
+    <a href="#workspace">Create workspace</a>
+    <a href="#first-project">First project</a>
+    <a href="#tasks">Creating tasks</a>
+    <a href="#integrations">GitHub integration</a>
+    <a href="#webhooks">Webhooks</a>
+    <a href="#api-rate-limits">Rate limits</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </aside>
+</div>
+
+<script>
+  window.__aria = { toggleDark: () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; } };
+  // Deliberately non-functional search — for demo only
+  document.getElementById('search-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const q = e.target.value;
+      alert(`Search is rebuilding its index. Try again after midnight.\n\nYour query: "${q}"\n\nOr ask ARIA!`);
+    }
+  });
+</script>
+</body>
+</html>

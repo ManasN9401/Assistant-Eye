@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NovaSuite — Project Intelligence Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f9f9fb; --bg2: #f0f0f5; --surface: #ffffff;
+    --border: #e4e4ec; --text: #1a1a2e; --text2: #5a5a7a;
+    --accent: #4f46e5; --accent2: #7c3aed; --green: #059669;
+    --red: #dc2626; --amber: #d97706;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  [data-theme="dark"] {
+    --bg: #0d0d14; --bg2: #141420; --surface: #1a1a28;
+    --border: #2a2a40; --text: #e8e8f0; --text2: #8888aa;
+    --accent: #6366f1; --shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); transition: background 0.3s, color 0.3s; }
+
+  /* Nav */
+  nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 40px; display: flex; align-items: center; height: 60px; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow); }
+  .nav-logo { font-size: 18px; font-weight: 600; color: var(--accent); letter-spacing: -0.5px; margin-right: 40px; }
+  .nav-links { display: flex; gap: 28px; flex: 1; }
+  .nav-links a { text-decoration: none; color: var(--text2); font-size: 14px; transition: color 0.2s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-right { display: flex; gap: 12px; align-items: center; }
+  .btn { padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; font-family: inherit; }
+  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--bg2); color: var(--text); }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { opacity: 0.9; }
+  .theme-toggle { background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; cursor: pointer; font-size: 12px; color: var(--text2); }
+
+  /* Hero */
+  .hero { padding: 100px 40px 80px; text-align: center; max-width: 860px; margin: 0 auto; }
+  .hero-badge { display: inline-block; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 5px 14px; font-size: 12px; color: var(--text2); margin-bottom: 24px; font-family: 'DM Mono', monospace; }
+  .hero h1 { font-size: 56px; font-weight: 600; line-height: 1.12; letter-spacing: -1.5px; margin-bottom: 20px; }
+  .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero p { font-size: 18px; color: var(--text2); line-height: 1.7; max-width: 560px; margin: 0 auto 36px; }
+  .hero-cta { display: flex; gap: 12px; justify-content: center; }
+
+  /* Feature grid */
+  .section { padding: 80px 40px; max-width: 1100px; margin: 0 auto; }
+  .section-tag { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--accent); letter-spacing: 2px; margin-bottom: 12px; }
+  .section h2 { font-size: 36px; font-weight: 600; letter-spacing: -0.8px; margin-bottom: 16px; }
+  .section p.sub { color: var(--text2); font-size: 16px; max-width: 520px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 48px; }
+  .feature-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .feature-icon { font-size: 24px; margin-bottom: 14px; }
+  .feature-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .feature-card p { font-size: 13px; color: var(--text2); line-height: 1.6; }
+
+  /* Pricing teaser */
+  .pricing-teaser { background: var(--bg2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 80px 40px; text-align: center; }
+  .pricing-teaser h2 { font-size: 32px; font-weight: 600; margin-bottom: 12px; }
+  .pricing-teaser p { color: var(--text2); font-size: 15px; margin-bottom: 32px; }
+  .plan-pills { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 32px; }
+  .plan-pill { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-size: 13px; min-width: 120px; }
+  .plan-pill .price { font-size: 22px; font-weight: 600; color: var(--accent); display: block; margin-top: 4px; }
+  .plan-pill.featured { border-color: var(--accent); }
+
+  /* Notice — this is deliberately confusing -->
+  .notice { background: var(--surface); border: 1px solid var(--amber); border-left: 4px solid var(--amber); padding: 14px 18px; border-radius: 6px; margin: 40px; font-size: 13px; color: var(--text2); }
+  .notice strong { color: var(--text); }
+
+  /* Footer */
+  footer { background: var(--surface); border-top: 1px solid var(--border); padding: 40px; text-align: center; font-size: 12px; color: var(--text2); }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-logo">NovaSuite</div>
+  <div class="nav-links">
+    <a href="index.html">Home</a>
+    <a href="pages/pricing.html">Pricing</a>
+    <a href="pages/docs.html">Docs</a>
+    <a href="pages/onboarding.html">Get started</a>
+    <a href="pages/settings.html">Account</a>
+    <a href="#">Blog</a>
+  </div>
+  <div class="nav-right">
+    <button class="theme-toggle" onclick="toggleDark()">☀ / ☾</button>
+    <button class="btn btn-ghost">Sign in</button>
+    <button class="btn btn-primary">Start free</button>
+  </div>
+</nav>
+
+<div class="notice">
+  <strong>👋 ARIA test site.</strong> This website is deliberately feature-rich and tedious to navigate manually. Use your ARIA assistant to find the right pricing plan, search docs, toggle dark mode, and more.
+</div>
+
+<section class="hero">
+  <div class="hero-badge">Now with AI-powered analytics →</div>
+  <h1>Project intelligence<br>for <span>modern teams</span></h1>
+  <p>NovaSuite brings your tasks, docs, timelines, and insights into one unified workspace. Stop context-switching. Start shipping.</p>
+  <div class="hero-cta">
+    <button class="btn btn-primary" style="padding:12px 28px;font-size:15px">Get started free</button>
+    <button class="btn btn-ghost" style="padding:12px 28px;font-size:15px">Watch demo</button>
+  </div>
+</section>
+
+<div class="section">
+  <div class="section-tag">EVERYTHING YOU NEED</div>
+  <h2>One platform, every workflow</h2>
+  <p class="sub">Replace the six tools your team uses with one that actually works together.</p>
+  <div class="grid-3">
+    <div class="feature-card"><div class="feature-icon">📋</div><h3>Task management</h3><p>Boards, lists, timelines. Assign, prioritise, and track everything your team ships.</p></div>
+    <div class="feature-card"><div class="feature-icon">📄</div><h3>Docs & wikis</h3><p>Rich text, code blocks, embeds. Your team's knowledge base lives right next to the work.</p></div>
+    <div class="feature-card"><div class="feature-icon">📊</div><h3>Reporting</h3><p>Burndown charts, velocity, custom dashboards. Data that actually helps you decide.</p></div>
+    <div class="feature-card"><div class="feature-icon">🔗</div><h3>Integrations</h3><p>GitHub, Jira, Slack, Figma, Linear. Two-way sync, not just webhooks.</p></div>
+    <div class="feature-card"><div class="feature-icon">🤖</div><h3>AI assistance</h3><p>Auto-summarise meetings, generate task descriptions, flag blockers before they bite.</p></div>
+    <div class="feature-card"><div class="feature-icon">🔒</div><h3>Enterprise security</h3><p>SSO, audit logs, custom data residency, SOC 2 Type II. No compromises.</p></div>
+  </div>
+</div>
+
+<div class="pricing-teaser">
+  <h2>Simple, transparent pricing</h2>
+  <p>Four plans. No hidden fees. Upgrade or downgrade any time.<br>
+  <em style="font-size:12px;color:var(--text2)">Note: Annual vs monthly pricing differs. Add-ons available. See full comparison →</em></p>
+  <div class="plan-pills">
+    <div class="plan-pill"><strong>Starter</strong><span class="price">Free</span></div>
+    <div class="plan-pill featured"><strong>Pro</strong><span class="price">$18/mo</span></div>
+    <div class="plan-pill"><strong>Business</strong><span class="price">$49/mo</span></div>
+    <div class="plan-pill"><strong>Enterprise</strong><span class="price">Custom</span></div>
+  </div>
+  <a href="pages/pricing.html"><button class="btn btn-primary">See full pricing comparison</button></a>
+</div>
+
+<footer>
+  © 2025 NovaSuite Inc. · Privacy · Terms · <a href="#" style="color:var(--text2)">Accessibility</a>
+  <br><br>
+  <span style="font-family:'DM Mono',monospace;font-size:10px">Dark mode? Go to Account → Preferences → Appearance → Theme. Or just ask ARIA.</span>
+</footer>
+
+<script>
+  // Expose toggle for ARIA
+  window.__aria = {
+    toggleDark: () => {
+      const html = document.documentElement;
+      html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+    }
+  };
+  function toggleDark() { window.__aria.toggleDark(); }
+</script>
+</body>
+</html>

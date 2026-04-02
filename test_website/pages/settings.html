@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Account Settings — NovaSuite</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f9f9fb;--bg2:#f0f0f5;--surface:#fff;--border:#e4e4ec;--text:#1a1a2e;--text2:#5a5a7a;--accent:#4f46e5;--green:#059669;--red:#dc2626;--amber:#d97706; }
+  [data-theme="dark"] { --bg:#0d0d14;--bg2:#141420;--surface:#1a1a28;--border:#2a2a40;--text:#e8e8f0;--text2:#8888aa;--accent:#6366f1; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); }
+  nav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 40px; display:flex; align-items:center; height:60px; }
+  .nav-logo { font-size:18px; font-weight:600; color:var(--accent); margin-right:auto; }
+
+  .settings-layout { display:flex; min-height:calc(100vh - 60px); }
+
+  /* Left nav */
+  .settings-nav { width:220px; background:var(--surface); border-right:1px solid var(--border); padding:28px 0; flex-shrink:0; }
+  .settings-nav h3 { font-size:10px; font-weight:600; letter-spacing:1.5px; color:var(--text2); padding:0 20px 8px; text-transform:uppercase; font-family:'DM Mono',monospace; }
+  .settings-nav a { display:block; padding:8px 20px; font-size:13px; color:var(--text2); text-decoration:none; border-left:2px solid transparent; }
+  .settings-nav a:hover { color:var(--text); background:var(--bg2); }
+  .settings-nav a.active { color:var(--accent); border-left-color:var(--accent); background:var(--bg2); }
+  .settings-nav .section-gap { height:20px; }
+
+  /* Content */
+  .settings-content { flex:1; padding:40px 56px; max-width:760px; }
+  .settings-content h1 { font-size:24px; font-weight:600; margin-bottom:4px; }
+  .settings-content .page-sub { color:var(--text2); font-size:14px; margin-bottom:32px; }
+
+  .settings-section { margin-bottom:36px; }
+  .settings-section h2 { font-size:14px; font-weight:600; margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+  .form-row { display:flex; align-items:center; justify-content:space-between; padding:14px 0; border-bottom:1px solid var(--border); }
+  .form-row:last-child { border-bottom:none; }
+  .form-row-label h4 { font-size:14px; font-weight:500; margin-bottom:2px; }
+  .form-row-label p { font-size:12px; color:var(--text2); }
+  .form-row-control { flex-shrink:0; margin-left:24px; }
+  input[type=text], input[type=email], select { padding:8px 12px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text); font-size:13px; font-family:inherit; min-width:200px; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
+
+  /* Toggle switch */
+  .toggle { display:flex; align-items:center; gap:8px; }
+  .toggle-sw { width:42px; height:24px; background:var(--border); border-radius:12px; position:relative; cursor:pointer; transition:background 0.2s; }
+  .toggle-sw.on { background:var(--accent); }
+  .toggle-sw::after { content:''; position:absolute; width:18px; height:18px; background:#fff; border-radius:50%; top:3px; left:3px; transition:transform 0.2s; }
+  .toggle-sw.on::after { transform:translateX(18px); }
+
+  /* Danger zone */
+  .danger-zone { border:1px solid var(--red); border-radius:10px; padding:20px; }
+  .danger-zone h2 { color:var(--red); font-size:14px; font-weight:600; margin-bottom:16px; }
+  .btn { padding:8px 18px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; border:none; font-family:inherit; }
+  .btn-danger { background:var(--red); color:white; }
+  .btn-save { background:var(--accent); color:white; }
+  .btn-ghost { background:transparent; color:var(--text2); border:1px solid var(--border); }
+
+  /* Notice about dark mode being buried -->
+  .buried-note { background:var(--bg2); border:1px solid var(--amber); border-radius:6px; padding:12px 16px; font-size:12px; color:var(--text2); margin-bottom:24px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-logo">NovaSuite</div>
+  <div style="display:flex;gap:12px;align-items:center">
+    <a href="../index.html" style="font-size:13px;color:var(--text2);text-decoration:none">← Back to app</a>
+  </div>
+</nav>
+
+<div class="settings-layout">
+  <nav class="settings-nav">
+    <h3>Account</h3>
+    <a href="#" class="active">Profile</a>
+    <a href="#" onclick="showSection('notifications')">Notifications</a>
+    <a href="#" onclick="showSection('security')">Security & login</a>
+    <a href="#" onclick="showSection('api')">API keys</a>
+
+    <div class="section-gap"></div>
+    <h3>Workspace</h3>
+    <a href="#" onclick="showSection('general')">General</a>
+    <a href="#" onclick="showSection('members')">Members & roles</a>
+    <a href="#" onclick="showSection('billing')">Billing</a>
+    <a href="#" onclick="showSection('integrations')">Integrations</a>
+
+    <div class="section-gap"></div>
+    <h3>Preferences</h3>
+    <!-- Dark mode is buried all the way down here -->
+    <a href="#" onclick="showSection('appearance')">Appearance</a>
+    <a href="#" onclick="showSection('language')">Language & region</a>
+    <a href="#" onclick="showSection('accessibility')">Accessibility</a>
+  </nav>
+
+  <div class="settings-content">
+    <!-- Profile section (default) -->
+    <div id="section-profile">
+      <h1>Profile</h1>
+      <p class="page-sub">Manage your personal information and how others see you.</p>
+
+      <div class="buried-note">
+        🎯 <strong>ARIA test:</strong> Dark mode is hidden in Preferences → Appearance. Or just ask ARIA: "turn on dark mode".
+      </div>
+
+      <div class="settings-section">
+        <h2>Personal information</h2>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Full name</h4><p>Displayed on tasks and comments</p></div>
+          <div class="form-row-control"><input type="text" value="Alex Johnson"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Display name</h4><p>Short name shown in mentions</p></div>
+          <div class="form-row-control"><input type="text" value="alex.j"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Email</h4><p>Used for login and notifications</p></div>
+          <div class="form-row-control"><input type="email" value="alex@acme.com"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Job title</h4><p>Optional — shown on your profile card</p></div>
+          <div class="form-row-control"><input type="text" placeholder="e.g. Senior Engineer"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Timezone</h4><p>Used for scheduling and due date display</p></div>
+          <div class="form-row-control">
+            <select>
+              <option>Europe/London (GMT+0)</option>
+              <option>America/New_York (GMT-5)</option>
+              <option>America/Los_Angeles (GMT-8)</option>
+              <option>Asia/Tokyo (GMT+9)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-save">Save changes</button>
+    </div>
+
+    <!-- Appearance (dark mode lives here) -->
+    <div id="section-appearance" style="display:none">
+      <h1>Appearance</h1>
+      <p class="page-sub">Control how NovaSuite looks and feels.</p>
+
+      <div class="settings-section">
+        <h2>Theme</h2>
+        <div class="form-row">
+          <div class="form-row-label">
+            <h4>Colour theme</h4>
+            <p>Switch between light and dark mode</p>
+          </div>
+          <div class="form-row-control">
+            <div class="toggle" id="dark-toggle" onclick="toggleDarkMode()">
+              <span id="dark-label" style="font-size:13px;color:var(--text2)">Light</span>
+              <div class="toggle-sw" id="dark-sw"></div>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Compact mode</h4><p>Reduce spacing between items</p></div>
+          <div class="form-row-control"><div class="toggle"><div class="toggle-sw"></div></div></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Font size</h4><p>Base text size across the app</p></div>
+          <div class="form-row-control">
+            <select><option>Small (13px)</option><option selected>Default (14px)</option><option>Large (16px)</option></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>Sidebar</h2>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Default sidebar position</h4><p>Where the project sidebar opens</p></div>
+          <div class="form-row-control"><select><option>Left (default)</option><option>Right</option><option>Hidden</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-row-label"><h4>Show task counts</h4><p>Display open task count on sidebar items</p></div>
+          <div class="form-row-control"><div class="toggle"><div class="toggle-sw on"></div></div></div>
+        </div>
+      </div>
+      <button class="btn btn-save">Save preferences</button>
+    </div>
+
+    <!-- Other sections (stubs) -->
+    <div id="section-notifications" style="display:none">
+      <h1>Notifications</h1><p class="page-sub">Control what you're notified about and how.</p>
+      <p style="color:var(--text2);margin-top:24px">Notification settings would appear here. Ask ARIA to navigate you to the right section.</p>
+    </div>
+    <div id="section-security" style="display:none">
+      <h1>Security & login</h1><p class="page-sub">Manage your password, 2FA, and active sessions.</p>
+    </div>
+    <div id="section-billing" style="display:none">
+      <h1>Billing</h1><p class="page-sub">Manage your plan and payment method.</p>
+      <p style="margin-top:16px;font-size:14px;color:var(--text2)">Current plan: <strong style="color:var(--text)">Pro</strong> — $15/user/month · Billed annually<br>
+      Next invoice: June 14, 2025 · $180.00 · 1 seat<br><br>
+      Need to change your plan? Ask ARIA: "What plan would be best if I add 5 more users?"</p>
+    </div>
+    <div id="section-general" style="display:none">
+      <h1>Workspace settings</h1><p class="page-sub">Manage workspace-level configuration.</p>
+    </div>
+    <div id="section-members" style="display:none">
+      <h1>Members & roles</h1><p class="page-sub">Manage who has access to this workspace.</p>
+    </div>
+    <div id="section-integrations" style="display:none">
+      <h1>Integrations</h1><p class="page-sub">Connect third-party tools to NovaSuite.</p>
+    </div>
+    <div id="section-api" style="display:none">
+      <h1>API keys</h1><p class="page-sub">Create and manage personal API tokens.</p>
+    </div>
+    <div id="section-language" style="display:none">
+      <h1>Language & region</h1><p class="page-sub">Date formats, number formats, and language.</p>
+    </div>
+    <div id="section-accessibility" style="display:none">
+      <h1>Accessibility</h1><p class="page-sub">Motion, contrast, and keyboard navigation settings.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  function showSection(id) {
+    document.querySelectorAll('[id^=section-]').forEach(s => s.style.display = 'none');
+    document.getElementById(`section-${id}`).style.display = 'block';
+    document.querySelectorAll('.settings-nav a').forEach(a => a.classList.remove('active'));
+    event.target.classList.add('active');
+  }
+
+  function toggleDarkMode() {
+    const h = document.documentElement;
+    const isDark = h.dataset.theme === 'dark';
+    h.dataset.theme = isDark ? 'light' : 'dark';
+    document.getElementById('dark-sw').classList.toggle('on', !isDark);
+    document.getElementById('dark-label').textContent = isDark ? 'Light' : 'Dark';
+  }
+
+  window.__aria = {
+    toggleDark: () => toggleDarkMode(),
+    goToAppearance: () => { showSection('appearance'); }
+  };
+</script>
+</body>
+</html>

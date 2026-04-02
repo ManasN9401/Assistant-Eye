@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 280px;
+    font-family: 'Segoe UI', Ubuntu, sans-serif;
+    background: #0e0e11;
+    color: #d1d1d8;
+    padding: 16px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #1f1f26;
+  }
+  .logo {
+    font-size: 14px;
+    font-weight: 700;
+    color: #e8a020;
+    letter-spacing: 3px;
+    font-family: 'Courier New', monospace;
+  }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #71717a;
+    margin-bottom: 14px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3f3f46;
+    flex-shrink: 0;
+  }
+  .dot.connected  { background: #22c55e; }
+  .dot.error      { background: #ef4444; }
+  .page-info {
+    background: #141418;
+    border: 1px solid #1f1f26;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 11px;
+    color: #71717a;
+    margin-bottom: 12px;
+    font-family: 'Courier New', monospace;
+    word-break: break-all;
+  }
+  .page-info .url { color: #a1a1aa; }
+  label {
+    font-size: 10px;
+    color: #52525b;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 4px;
+  }
+  input {
+    width: 100%;
+    background: #0a0a0d;
+    border: 1px solid #27272a;
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #d1d1d8;
+    font-size: 12px;
+    font-family: inherit;
+    margin-bottom: 10px;
+  }
+  input:focus { outline: none; border-color: #e8a020; }
+  button {
+    width: 100%;
+    background: #e8a020;
+    color: #0a0600;
+    border: none;
+    border-radius: 6px;
+    padding: 9px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { background: #f5b030; }
+  .divider { height: 1px; background: #1f1f26; margin: 12px 0; }
+  .btn-secondary {
+    background: transparent;
+    color: #71717a;
+    border: 1px solid #27272a;
+    margin-top: 6px;
+    font-weight: 400;
+  }
+  .btn-secondary:hover { background: #141418; color: #d1d1d8; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo" id="assistant-name">EYE</div>
+  <div style="font-size:10px;color:#3f3f46;letter-spacing:1px">BROWSER BRIDGE</div>
+</div>
+
+<div class="status-row">
+  <div class="dot" id="status-dot"></div>
+  <span id="status-text">Connecting to EYE app…</span>
+</div>
+
+<div class="page-info">
+  <div id="page-title" style="margin-bottom:3px">—</div>
+  <div class="url" id="page-url">—</div>
+</div>
+
+<label>Quick command</label>
+<input type="text" id="cmd-input" placeholder="Ask EYE…">
+<button id="cmd-send">Send to EYE →</button>
+
+<div class="divider"></div>
+
+<button class="btn-secondary" id="open-panel">Open control panel</button>
+<button class="btn-secondary" id="toggle-dark" style="margin-top:6px">Toggle dark mode</button>
+
+<script src="popup.js"></script>
+</body>
+</html>

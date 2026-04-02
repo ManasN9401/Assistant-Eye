@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Get Started — NovaSuite</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f9f9fb;--bg2:#f0f0f5;--surface:#fff;--border:#e4e4ec;--text:#1a1a2e;--text2:#5a5a7a;--accent:#4f46e5;--green:#059669;--red:#dc2626;--amber:#d97706; }
+  [data-theme="dark"] { --bg:#0d0d14;--bg2:#141420;--surface:#1a1a28;--border:#2a2a40;--text:#e8e8f0;--text2:#8888aa;--accent:#6366f1; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+
+  nav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 40px; display:flex; align-items:center; height:60px; }
+  .nav-logo { font-size:18px; font-weight:600; color:var(--accent); margin-right:auto; }
+  .theme-btn { background:var(--bg2); border:1px solid var(--border); border-radius:20px; padding:5px 12px; cursor:pointer; font-size:12px; color:var(--text2); }
+
+  .wizard-layout { display:flex; min-height:calc(100vh - 60px); }
+
+  /* Left progress rail */
+  .progress-rail { width:240px; background:var(--surface); border-right:1px solid var(--border); padding:40px 24px; flex-shrink:0; }
+  .progress-rail h3 { font-size:11px; font-weight:600; letter-spacing:1.5px; color:var(--text2); text-transform:uppercase; margin-bottom:24px; font-family:'DM Mono',monospace; }
+  .step-item { display:flex; align-items:flex-start; gap:12px; margin-bottom:20px; position:relative; }
+  .step-item::before { content:''; position:absolute; left:15px; top:32px; width:2px; height:calc(100% + 4px); background:var(--border); }
+  .step-item:last-child::before { display:none; }
+  .step-num { width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; background:var(--bg2); border:2px solid var(--border); color:var(--text2); }
+  .step-num.done { background:var(--green); border-color:var(--green); color:white; }
+  .step-num.active { background:var(--accent); border-color:var(--accent); color:white; }
+  .step-label h4 { font-size:13px; font-weight:500; margin-bottom:2px; }
+  .step-label p { font-size:11px; color:var(--text2); }
+
+  /* Main content */
+  .wizard-content { flex:1; padding:48px 60px; max-width:760px; }
+  .step-header { margin-bottom:32px; }
+  .step-tag { font-size:11px; font-weight:600; letter-spacing:2px; color:var(--accent); text-transform:uppercase; font-family:'DM Mono',monospace; margin-bottom:8px; }
+  .step-header h1 { font-size:28px; font-weight:600; letter-spacing:-0.5px; margin-bottom:8px; }
+  .step-header p { color:var(--text2); font-size:15px; line-height:1.6; }
+
+  .form-group { margin-bottom:20px; }
+  label { display:block; font-size:12px; font-weight:500; color:var(--text2); margin-bottom:6px; letter-spacing:0.3px; }
+  input[type=text], input[type=email], input[type=url], select, textarea {
+    width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:8px;
+    background:var(--surface); color:var(--text); font-size:14px; font-family:inherit;
+    transition:border-color 0.15s;
+  }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  textarea { resize:vertical; min-height:80px; }
+  .input-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+
+  /* Radio cards */
+  .radio-cards { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-top:8px; }
+  .radio-card { border:2px solid var(--border); border-radius:10px; padding:16px; cursor:pointer; transition:all 0.15s; }
+  .radio-card:hover { border-color:var(--accent); background:var(--bg2); }
+  .radio-card.selected { border-color:var(--accent); background:var(--bg2); }
+  .radio-card input { display:none; }
+  .radio-card .icon { font-size:24px; margin-bottom:8px; }
+  .radio-card .title { font-size:13px; font-weight:600; margin-bottom:3px; }
+  .radio-card .desc { font-size:11px; color:var(--text2); }
+
+  /* Checkboxes */
+  .check-list { display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+  .check-item { display:flex; align-items:center; gap:10px; padding:12px 16px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+  .check-item:hover { background:var(--bg2); }
+  .check-item input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
+  .check-item .check-text h4 { font-size:13px; font-weight:500; margin-bottom:2px; }
+  .check-item .check-text p { font-size:11px; color:var(--text2); }
+
+  /* Team invite table */
+  .invite-table { width:100%; border-collapse:collapse; margin-top:8px; }
+  .invite-table th { font-size:11px; font-weight:600; color:var(--text2); padding:8px 12px; text-align:left; border-bottom:1px solid var(--border); }
+  .invite-table td { padding:8px 12px; border-bottom:1px solid var(--border); }
+  .invite-table td input, .invite-table td select { border:none; background:transparent; font-family:inherit; font-size:13px; color:var(--text); width:100%; padding:2px 0; }
+  .invite-table td input:focus, .invite-table td select:focus { outline:none; }
+  .add-row-btn { font-size:12px; color:var(--accent); cursor:pointer; margin-top:8px; background:none; border:none; font-family:inherit; }
+  .add-row-btn:hover { text-decoration:underline; }
+
+  /* Integrations grid */
+  .integrations-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-top:8px; }
+  .integration-tile { border:1px solid var(--border); border-radius:8px; padding:14px; text-align:center; cursor:pointer; transition:0.15s; }
+  .integration-tile:hover { border-color:var(--accent); }
+  .integration-tile.connected { border-color:var(--green); background:#f0fdf4; }
+  [data-theme="dark"] .integration-tile.connected { background:#052e16; }
+  .integration-tile .int-icon { font-size:28px; margin-bottom:6px; }
+  .integration-tile .int-name { font-size:12px; font-weight:500; }
+  .integration-tile .int-status { font-size:10px; color:var(--text2); margin-top:2px; }
+  .integration-tile.connected .int-status { color:var(--green); }
+
+  /* Callout */
+  .callout { background:var(--bg2); border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:6px; padding:14px 16px; font-size:13px; color:var(--text2); margin:20px 0; line-height:1.7; }
+  .callout strong { color:var(--text); }
+
+  /* Review step */
+  .review-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:16px; }
+  .review-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .review-row:last-child { border-bottom:none; }
+  .review-row .key { color:var(--text2); }
+  .review-row .val { font-weight:500; color:var(--text); }
+  .review-row .val.accent { color:var(--accent); }
+
+  /* Footer nav */
+  .wizard-footer { margin-top:48px; padding-top:24px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .btn { padding:10px 24px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; border:none; font-family:inherit; transition:all 0.15s; }
+  .btn-ghost { background:transparent; color:var(--text2); border:1px solid var(--border); }
+  .btn-ghost:hover { background:var(--bg2); color:var(--text); }
+  .btn-primary { background:var(--accent); color:white; }
+  .btn-primary:hover { opacity:0.9; }
+  .btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
+  .step-counter { font-size:12px; color:var(--text2); font-family:'DM Mono',monospace; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-logo">NovaSuite</div>
+  <button class="theme-btn" onclick="window.__aria?.toggleDark()">☀ / ☾</button>
+</nav>
+
+<div class="wizard-layout">
+  <!-- Progress rail -->
+  <div class="progress-rail">
+    <h3>Setup</h3>
+    <div class="step-item">
+      <div class="step-num done" id="sn-1">✓</div>
+      <div class="step-label"><h4>Account</h4><p>Created</p></div>
+    </div>
+    <div class="step-item">
+      <div class="step-num active" id="sn-2">2</div>
+      <div class="step-label"><h4>Workspace</h4><p>Name & region</p></div>
+    </div>
+    <div class="step-item">
+      <div class="step-num" id="sn-3">3</div>
+      <div class="step-label"><h4>Team use case</h4><p>How you'll use it</p></div>
+    </div>
+    <div class="step-item">
+      <div class="step-num" id="sn-4">4</div>
+      <div class="step-label"><h4>Invite team</h4><p>Add members</p></div>
+    </div>
+    <div class="step-item">
+      <div class="step-num" id="sn-5">5</div>
+      <div class="step-label"><h4>Integrations</h4><p>Connect your tools</p></div>
+    </div>
+    <div class="step-item">
+      <div class="step-num" id="sn-6">6</div>
+      <div class="step-label"><h4>Review & launch</h4><p>Confirm and go</p></div>
+    </div>
+  </div>
+
+  <!-- Main pane (steps shown/hidden) -->
+  <div class="wizard-content">
+
+    <!-- Step 2: Workspace -->
+    <div id="step-2" class="step-pane">
+      <div class="step-header">
+        <div class="step-tag">Step 2 of 6</div>
+        <h1>Set up your workspace</h1>
+        <p>Your workspace is where your whole team lives. Choose a name and the region that's closest to your team.</p>
+      </div>
+      <div class="form-group">
+        <label>Workspace name</label>
+        <input type="text" placeholder="Acme Corp" id="ws-name">
+      </div>
+      <div class="form-group">
+        <label>Workspace URL slug</label>
+        <div style="display:flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)">
+          <span style="padding:10px 12px;background:var(--bg2);color:var(--text2);font-size:13px;font-family:'DM Mono',monospace;border-right:1px solid var(--border)">app.novasuite.io/</span>
+          <input type="text" placeholder="acme" id="ws-slug" style="border:none;border-radius:0;flex:1">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Data region</label>
+        <select id="ws-region">
+          <option value="">— Select region —</option>
+          <option value="us-east-1">US East (N. Virginia)</option>
+          <option value="eu-west-1">EU West (Ireland) — GDPR compliant</option>
+          <option value="ap-southeast-1">AP Southeast (Singapore)</option>
+        </select>
+        <p style="font-size:11px;color:var(--text2);margin-top:6px">⚠ Region is permanent after creation. Choose carefully.</p>
+      </div>
+      <div class="form-group">
+        <label>Company size</label>
+        <div class="radio-cards">
+          <label class="radio-card" onclick="selectCard(this,'size')">
+            <input type="radio" name="size" value="solo"><div class="icon">🧑</div><div class="title">Solo</div><div class="desc">Just me</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'size')">
+            <input type="radio" name="size" value="small"><div class="icon">👥</div><div class="title">Small team</div><div class="desc">2–25 people</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'size')">
+            <input type="radio" name="size" value="mid"><div class="icon">🏢</div><div class="title">Mid-size</div><div class="desc">26–200</div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Use case -->
+    <div id="step-3" class="step-pane" style="display:none">
+      <div class="step-header">
+        <div class="step-tag">Step 3 of 6</div>
+        <h1>How will your team use NovaSuite?</h1>
+        <p>This helps us configure the right default views and templates. You can change everything later.</p>
+      </div>
+      <div class="form-group">
+        <label>Primary use case</label>
+        <div class="radio-cards" style="grid-template-columns:repeat(3,1fr)">
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="software"><div class="icon">💻</div><div class="title">Software dev</div><div class="desc">Sprints, PRs, bugs</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="marketing"><div class="icon">📣</div><div class="title">Marketing</div><div class="desc">Campaigns, content</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="ops"><div class="icon">⚙️</div><div class="title">Operations</div><div class="desc">Processes, SOPs</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="design"><div class="icon">🎨</div><div class="title">Design</div><div class="desc">Assets, reviews</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="sales"><div class="icon">📈</div><div class="title">Sales / CRM</div><div class="desc">Deals, pipelines</div>
+          </label>
+          <label class="radio-card" onclick="selectCard(this,'use')">
+            <input type="radio" name="use" value="other"><div class="icon">✳️</div><div class="title">Other</div><div class="desc">I'll set up manually</div>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>What matters most to your team? (select all that apply)</label>
+        <div class="check-list">
+          <label class="check-item"><input type="checkbox" checked><div class="check-text"><h4>Task tracking</h4><p>Assign, prioritise, track completion</p></div></label>
+          <label class="check-item"><input type="checkbox"><div class="check-text"><h4>Timeline & scheduling</h4><p>Gantt charts, deadlines, dependencies</p></div></label>
+          <label class="check-item"><input type="checkbox"><div class="check-text"><h4>Documentation</h4><p>Wikis, specs, meeting notes</p></div></label>
+          <label class="check-item"><input type="checkbox"><div class="check-text"><h4>Reporting & analytics</h4><p>Velocity, burndown, custom dashboards</p></div></label>
+          <label class="check-item"><input type="checkbox"><div class="check-text"><h4>AI assistance</h4><p>Auto-summarise, blocker detection</p></div></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Invite -->
+    <div id="step-4" class="step-pane" style="display:none">
+      <div class="step-header">
+        <div class="step-tag">Step 4 of 6</div>
+        <h1>Invite your team</h1>
+        <p>Add teammates now or skip — you can always invite more from workspace settings. Invitations are valid for 7 days.</p>
+      </div>
+      <div class="callout">
+        <strong>Pro tip:</strong> You can also import from Google Workspace, Slack, or GitHub. Go to Settings → Members → Import after setup.
+      </div>
+      <table class="invite-table" id="invite-table">
+        <thead>
+          <tr><th style="width:42%">Email</th><th style="width:32%">Full name</th><th style="width:22%">Role</th><th></th></tr>
+        </thead>
+        <tbody id="invite-rows">
+          <tr><td><input type="email" placeholder="alice@company.com"></td><td><input type="text" placeholder="Alice Smith"></td><td><select><option>Member</option><option>Admin</option><option>Guest</option></select></td><td></td></tr>
+          <tr><td><input type="email" placeholder="bob@company.com"></td><td><input type="text" placeholder="Bob Jones"></td><td><select><option>Member</option><option>Admin</option><option>Guest</option></select></td><td></td></tr>
+        </tbody>
+      </table>
+      <button class="add-row-btn" onclick="addInviteRow()">+ Add another</button>
+      <p style="font-size:12px;color:var(--text2);margin-top:16px">
+        Invited members will receive an email. Guests have read + comment access only and don't count against your seat limit on paid plans.
+      </p>
+    </div>
+
+    <!-- Step 5: Integrations -->
+    <div id="step-5" class="step-pane" style="display:none">
+      <div class="step-header">
+        <div class="step-tag">Step 5 of 6</div>
+        <h1>Connect your tools</h1>
+        <p>Integrations sync automatically. You can configure details after setup.</p>
+      </div>
+      <div class="integrations-grid">
+        <div class="integration-tile connected" onclick="toggleInt(this)"><div class="int-icon">⬡</div><div class="int-name">GitHub</div><div class="int-status">Connected</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">💬</div><div class="int-name">Slack</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">🔷</div><div class="int-name">Jira</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">🎨</div><div class="int-name">Figma</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">⚡</div><div class="int-name">Zapier</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">📊</div><div class="int-name">Google Sheets</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">📧</div><div class="int-name">Gmail</div><div class="int-status">Connect</div></div>
+        <div class="integration-tile" onclick="toggleInt(this)"><div class="int-icon">🔔</div><div class="int-name">PagerDuty</div><div class="int-status">Connect</div></div>
+      </div>
+      <p style="font-size:12px;color:var(--text2);margin-top:20px">Some integrations require an admin to authorise. See our <a href="../pages/docs.html" style="color:var(--accent)">integration docs</a> for requirements.</p>
+    </div>
+
+    <!-- Step 6: Review -->
+    <div id="step-6" class="step-pane" style="display:none">
+      <div class="step-header">
+        <div class="step-tag">Step 6 of 6</div>
+        <h1>Review & launch</h1>
+        <p>Here's a summary of your setup. Launch when you're ready — you can change any of this later.</p>
+      </div>
+      <div class="review-card">
+        <div class="review-row"><span class="key">Workspace</span><span class="val" id="rev-ws">—</span></div>
+        <div class="review-row"><span class="key">URL</span><span class="val accent" id="rev-url">—</span></div>
+        <div class="review-row"><span class="key">Region</span><span class="val" id="rev-region">—</span></div>
+        <div class="review-row"><span class="key">Plan</span><span class="val">Pro (14-day trial)</span></div>
+        <div class="review-row"><span class="key">Invites queued</span><span class="val" id="rev-invites">0</span></div>
+        <div class="review-row"><span class="key">Integrations connected</span><span class="val" id="rev-ints">1</span></div>
+      </div>
+      <div class="callout">
+        <strong>What happens next:</strong> Your workspace is created instantly. Invitation emails are sent immediately. Your first project will be created from the template matching your use case.
+        <br><br>
+        <strong>Tip:</strong> The ARIA assistant has already been added to your workspace. You can ask it things like "what's the best pricing plan?" or "search the docs for webhook setup".
+      </div>
+      <div class="form-group" style="margin-top:24px">
+        <label>Anything we should know? (optional)</label>
+        <textarea placeholder="E.g. we're migrating from Jira and need help with the import…"></textarea>
+      </div>
+    </div>
+
+    <!-- Footer nav -->
+    <div class="wizard-footer">
+      <button class="btn btn-ghost" id="btn-back" onclick="goPrev()" style="visibility:hidden">← Back</button>
+      <span class="step-counter" id="step-counter">Step 2 of 6</span>
+      <button class="btn btn-primary" id="btn-next" onclick="goNext()">Continue →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentStep = 2;
+  const totalSteps = 6;
+
+  function showStep(n) {
+    document.querySelectorAll('.step-pane').forEach(p => p.style.display = 'none');
+    document.getElementById(`step-${n}`).style.display = 'block';
+    document.getElementById('step-counter').textContent = `Step ${n} of ${totalSteps}`;
+    document.getElementById('btn-back').style.visibility = n > 2 ? 'visible' : 'hidden';
+    document.getElementById('btn-next').textContent = n === totalSteps ? '🚀 Launch workspace' : 'Continue →';
+
+    // Update rail
+    for (let i = 1; i <= totalSteps; i++) {
+      const el = document.getElementById(`sn-${i}`);
+      if (!el) continue;
+      el.className = 'step-num';
+      if (i < n) { el.classList.add('done'); el.textContent = '✓'; }
+      else if (i === n) { el.classList.add('active'); el.textContent = i; }
+      else el.textContent = i;
+    }
+  }
+
+  function goNext() {
+    if (currentStep === totalSteps) {
+      updateReview();
+      setTimeout(() => alert('Workspace launched! (Demo only — no real account created)\nTry asking ARIA: "What plan would suit a 10-person dev team?"'), 100);
+      return;
+    }
+    if (currentStep === 5) updateReview();
+    currentStep++;
+    showStep(currentStep);
+    window.scrollTo(0, 0);
+  }
+
+  function goPrev() {
+    if (currentStep > 2) { currentStep--; showStep(currentStep); }
+  }
+
+  function selectCard(el, group) {
+    document.querySelectorAll(`.radio-card`).forEach(c => {
+      if (c.querySelector(`input[name="${group}"]`)) c.classList.remove('selected');
+    });
+    el.classList.add('selected');
+  }
+
+  function toggleInt(el) {
+    el.classList.toggle('connected');
+    el.querySelector('.int-status').textContent = el.classList.contains('connected') ? 'Connected' : 'Connect';
+    document.getElementById('rev-ints').textContent =
+      document.querySelectorAll('.integration-tile.connected').length;
+  }
+
+  let inviteCount = 2;
+  function addInviteRow() {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td><input type="email" placeholder="teammate@company.com"></td><td><input type="text" placeholder="Full name"></td><td><select><option>Member</option><option>Admin</option><option>Guest</option></select></td><td><span style="cursor:pointer;color:var(--red);font-size:11px" onclick="this.closest('tr').remove()">✕</span></td>`;
+    document.getElementById('invite-rows').appendChild(row);
+  }
+
+  function updateReview() {
+    const wsName = document.getElementById('ws-name').value || 'Unnamed workspace';
+    const wsSlug = document.getElementById('ws-slug').value || 'your-workspace';
+    const region = document.getElementById('ws-region');
+    document.getElementById('rev-ws').textContent     = wsName;
+    document.getElementById('rev-url').textContent    = `app.novasuite.io/${wsSlug}`;
+    document.getElementById('rev-region').textContent = region.options[region.selectedIndex]?.text || '—';
+    const emails = document.querySelectorAll('#invite-rows input[type=email]');
+    let filled = 0;
+    emails.forEach(e => { if (e.value.trim()) filled++; });
+    document.getElementById('rev-invites').textContent = filled;
+  }
+
+  window.__aria = { toggleDark: () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; } };
+  showStep(2);
+</script>
+</body>
+</html>
