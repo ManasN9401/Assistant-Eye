@@ -1,6 +1,7 @@
 """
 EYE — AI Website Assistant (Phase 4 — complete)
 """
+import logging
 import sys
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QColor, QPixmap, QPainter, QBrush
@@ -33,24 +34,44 @@ def _tray_icon(color="#e8a020") -> QIcon:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    log = logging.getLogger("main")
+
     app = QApplication(sys.argv)
     app.setApplicationName("EYE")
     app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(DARK_QSS)
+    log.debug("Starting EYE assistant application")
 
     # ── Core ──────────────────────────────────────────────────────────────────
     settings = Settings()
     engine   = AIEngine(settings)
     registry = FunctionRegistry(settings)
+    
+    # Auto-load the builtin registry if available
+    registries = registry.list_registries()
+    if registries:
+        registry.load(registries[0]["file"])
+        log.debug("Auto-loaded registry: %s", registries[0]["name"])
+    
+    log.debug("Core initialized: settings=%s, registry=%s", settings, registry)
 
     # ── Browser bridge ────────────────────────────────────────────────────────
     browser_bridge = BrowserBridgeThread(settings)
     browser_bridge.start()
+    log.debug("Browser bridge thread started")
     playwright = PlaywrightBridge(settings, engine)
     executor   = ActionExecutor(settings, engine, playwright, browser_bridge)
+    log.debug("Action executor created")
 
     # ── Voice ─────────────────────────────────────────────────────────────────
     voice = VoiceCoordinator(settings, engine, registry)
+    log.debug("Voice coordinator initialized")
 
     # ── Visual ────────────────────────────────────────────────────────────────
     visual = VisualCoordinator(settings)
@@ -98,12 +119,17 @@ def main():
     voice.response_complete.connect(lambda _: overlay.end_response())
     
     # Show AI or Wake word errors visibly instead of swallowing them
+    voice.error.connect(lambda msg: log.error("Voice error: %s", msg))
     voice.error.connect(overlay._on_err)
     voice.error.connect(lambda msg: panel._dashboard.append_token(f"\n[ERROR] {msg}\n"))
     
-    voice.action_detected.connect(
-        lambda fn_def, params: voice.tts.speak(executor.execute_action(fn_def, params))
-    )
+    def _on_action_detected(fn_def, params):
+        log.debug("Action detected: %s %s", fn_def.get('name'), params)
+        result = executor.execute_action(fn_def, params)
+        log.debug("Action execution result: %s", result)
+        voice.tts.speak(result)
+
+    voice.action_detected.connect(_on_action_detected)
     browser_bridge.page_changed.connect(panel.on_page_changed)
     browser_bridge.user_command.connect(voice.send_text)
     overlay.command_entered.connect(voice.send_text)
@@ -180,6 +206,7 @@ def main():
 
     panel.show()
     overlay.show()
+    log.debug("Main UI shown")
     sys.exit(app.exec())
 
 

@@ -72,24 +72,76 @@ async function handleMessage(msg) {
     return;
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) {
-    send({ type: "error", id, message: "No active tab" });
+  // For all page-related operations, find a suitable tab.
+  const isValidTab = (candidate) => {
+    return candidate && candidate.url && !candidate.url.startsWith("chrome://") && !candidate.url.startsWith("chrome-extension://");
+  };
+
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!isValidTab(tab)) {
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    tab = tabs.find(isValidTab);
+    if (tab) {
+      console.warn("[EYE] active tab invalid, falling back to first normal tab in current window:", tab.url);
+    }
+  }
+
+  if (!isValidTab(tab)) {
+    const allTabs = await chrome.tabs.query({});
+    tab = allTabs.find(isValidTab);
+    console.warn("[EYE] no valid current-window tab, falling back to first normal tab across all windows:", tab?.url);
+  }
+
+  if (!isValidTab(tab)) {
+    send({ type: "error", id, message: "No browser tab available for execution" });
     return;
   }
 
   if (type === "execute_js") {
     try {
+      console.log("[EYE] executing JS on tab", tab.id, "URL:", tab.url, "Code:", msg.code);
+      
+      const usesAria = msg.code.includes("__aria");
+      
+      if (usesAria) {
+        // Execute in the page MAIN world to access page/context helpers directly.
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: (code) => {
+            // eslint-disable-next-line no-eval
+            return eval(code);
+          },
+          args: [msg.code],
+        });
+        const returnValue = result?.result ?? null;
+        console.log("[EYE] JS execution result (MAIN world):", returnValue);
+        send({ type: "result", id, value: returnValue });
+        return;
+      }
+
+      // For non-__aria code, use isolated world (safer)
       const [result] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: new Function(`return (${msg.code})`),
+        func: (code) => {
+          // eslint-disable-next-line no-eval
+          const result = eval(code);
+          console.log("[Isolated] Eval result:", result);
+          return result;
+        },
+        args: [msg.code],
       });
-      send({ type: "result", id, value: result?.result ?? null });
-    } catch (e) {
-      send({ type: "error", id, message: e.message });
+      const returnValue = result?.result ?? null;
+      console.log("[EYE] JS execution result:", returnValue);
+      send({ type: "result", id, value: returnValue });
+      return;
+    } catch (err) {
+      console.error("[EYE] JS execution error:", err.message, err.stack);
+      send({ type: "error", id, message: err.message });
+      return;
     }
-    return;
   }
+
 
   if (type === "navigate") {
     await chrome.tabs.update(tab.id, { url: msg.url });
@@ -147,6 +199,11 @@ async function sendCurrentPageInfo() {
 function broadcastStatus(status) {
   currentStatus = status;  // keep state so get_status queries always get the latest
   chrome.runtime.sendMessage({ type: "status", status }).catch(() => {});
+}
+
+function broadcastToPopups(msg) {
+  // Send message to all popup pages
+  chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
 // ── Respond to popup's get_status query ──────────────────────────────────────

@@ -12,6 +12,7 @@ States:
 Emits Qt signals so the UI (overlay + control panel) can react to state changes.
 """
 from __future__ import annotations
+import logging
 import re
 from typing import Optional
 
@@ -136,11 +137,14 @@ class VoiceCoordinator(QObject):
             self.trigger_listen()
 
     def _on_transcription(self, text: str):
+        log = logging.getLogger(__name__)
+        log.debug("Transcription received: %s", text)
         self.transcription.emit(text)
         self._set_state("thinking")
         system = self.registry.get_system_prompt() or (
             f"You are {self.settings.assistant_name}, a helpful assistant. Be concise."
         )
+        log.debug("Using AI system prompt:\n%s", system)
         self._ai_worker = AIStreamWorker(self.ai_engine, text, system, self)
         self._ai_worker.token.connect(self.response_token)
         self._ai_worker.done.connect(self._on_ai_done)
@@ -148,16 +152,22 @@ class VoiceCoordinator(QObject):
         self._ai_worker.start()
 
     def _on_ai_done(self, full_text: str):
+        log = logging.getLogger(__name__)
+        log.debug("AI done received full text: %s", full_text)
         self.response_complete.emit(full_text)
         self._set_state("speaking")
 
         # Check for action JSON
         action, speech = self._parse_action(full_text)
+        log.debug("Parsed action: %s remainder: %s", action, speech)
         if action:
             fn_name = action.get("action", "")
             params  = action.get("params", {})
             fn_def  = self._find_function(fn_name)
-            if fn_def:
+            if not fn_def:
+                log.warning("Action name matched but no function definition found: %s", fn_name)
+            else:
+                log.debug("Emitting action_detected for %s with params %s", fn_name, params)
                 self.action_detected.emit(fn_def, params)
 
         # Speak the non-JSON part
@@ -182,6 +192,34 @@ class VoiceCoordinator(QObject):
         Returns (action_dict | None, remaining_text).
         """
         import json
+
+        # Find the first occurrence of the action key and parse balanced braces around it.
+        action_key = '"action"'
+        pos = text.find(action_key)
+        if pos == -1:
+            return None, text
+
+        # Locate the opening brace for the JSON object preceding the action key.
+        start = text.rfind('{', 0, pos)
+        if start == -1:
+            return None, text
+
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:i + 1]
+                    try:
+                        action = json.loads(candidate)
+                        remainder = (text[:start] + text[i + 1:]).strip()
+                        return action, remainder
+                    except json.JSONDecodeError:
+                        break
+
+        # Fallback to a simple regex if the balanced parser fails.
         pattern = r'\{[^{}]*"action"[^{}]*\}'
         match = re.search(pattern, text)
         if not match:

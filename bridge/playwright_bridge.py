@@ -6,9 +6,12 @@ Also contains the unified ActionExecutor.
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import re
 from typing import Any, Optional
 
+
+log = logging.getLogger(__name__)
 
 class PlaywrightBridge:
     def __init__(self, settings, engine=None):
@@ -100,13 +103,23 @@ class ActionExecutor:
         return f"Unknown action type: {action_type}"
 
     async def _run_js(self, code: str) -> str:
-        if self.browser_bridge and self.browser_bridge.server.is_connected:
+        bridge_connected = bool(self.browser_bridge and self.browser_bridge.server.is_connected)
+        log.debug("_run_js called; browser_bridge_connected=%s, playwright_running=%s", bridge_connected, self.playwright.is_running)
+        if bridge_connected:
+            log.debug("Sending JS to browser bridge: %s", code)
             fut = self.browser_bridge.run_coro(self.browser_bridge.server.execute_js(code))
-            result = await asyncio.wrap_future(fut)
-            return f"Done: {result}"
+            try:
+                result = await asyncio.wrap_future(fut)
+                log.debug("Browser bridge JS result: %s", result)
+                return f"Done: {result}"
+            except Exception as exc:
+                log.exception("Browser bridge JS execution failed")
+                return f"Browser bridge error: {exc}"
         if self.playwright.is_running:
             result = await self.playwright.evaluate(code)
+            log.debug("Playwright JS result: %s", result)
             return f"Done: {result}"
+        log.warning("No browser connected; cannot execute JS action")
         return "No browser connected"
 
     async def _run_navigate(self, path: str) -> str:

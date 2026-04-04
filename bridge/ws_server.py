@@ -86,6 +86,7 @@ class BrowserWSServer:
 
     async def _dispatch(self, msg: dict):
         t = msg.get("type")
+        log.debug("BrowserWS received: %s", msg)
 
         if t == "pong":
             return
@@ -102,12 +103,14 @@ class BrowserWSServer:
 
         if t == "page_info":
             self._page_info = {"url": msg.get("url", ""), "title": msg.get("title", "")}
+            log.debug("Page info updated: %s", self._page_info)
             if self._on_page_change_cb:
                 self._on_page_change_cb(self._page_info["url"], self._page_info["title"])
             return
 
         if t == "user_command":
             text = msg.get("text", "")
+            log.debug("User command received from extension: %s", text)
             if text and self._on_user_command_cb:
                 self._on_user_command_cb(text)
             return

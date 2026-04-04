@@ -12,6 +12,48 @@
   if (window.__ariaInjected) return;
   window.__ariaInjected = true;
 
+  /**
+   * Bridge for executing code in MAIN world (page context).
+   * Content script receives execute_in_main_world message and injects a script tag.
+   */
+  window.__executeInMainWorld = function (code) {
+    return new Promise((resolve, reject) => {
+      const eventId = Math.random().toString(36).substr(2, 9);
+      
+      const handler = (event) => {
+        if (event.detail.eventId === eventId) {
+          window.removeEventListener("__mainWorldResult", handler);
+          if (event.detail.error) {
+            reject(new Error(event.detail.error));
+          } else {
+            resolve(event.detail.result);
+          }
+        }
+      };
+      
+      window.addEventListener("__mainWorldResult", handler);
+      
+      // Create a script tag to execute code in MAIN world
+      const script = document.createElement("script");
+      script.textContent = `
+        (function() {
+          try {
+            const result = (${code});
+            window.dispatchEvent(new CustomEvent("__mainWorldResult", {
+              detail: { eventId: "${eventId}", result: result }
+            }));
+          } catch (error) {
+            window.dispatchEvent(new CustomEvent("__mainWorldResult", {
+              detail: { eventId: "${eventId}", error: error.message }
+            }));
+          }
+        })();
+      `;
+      document.documentElement.appendChild(script);
+      script.remove();
+    });
+  };
+
   // ── Helper utilities exposed to registry JS actions ──────────────────────
 
   window.__aria = window.__aria || {};
