@@ -234,11 +234,12 @@ class EyeTrackingWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
+            from mediapipe.tasks.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
+            from mediapipe import Image, ImageFormat
         except ImportError as e:
             self.error.emit(f"Missing: {e}. Run: pip install opencv-python mediapipe")
             return
 
-        mp_face = mp.solutions.face_mesh
         self._running = True
 
         cap = cv2.VideoCapture(self.camera_index)
@@ -255,11 +256,14 @@ class EyeTrackingWorker(QThread):
         R_INNER = 133
         R_OUTER = 33
 
-        with mp_face.FaceMesh(
-            refine_landmarks=True,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7,
-        ) as face_mesh:
+        try:
+            options = FaceLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                running_mode=RunningMode.IMAGE,
+                output_face_blendshapes=False,
+            )
+            landmarker = FaceLandmarker.create_from_options(options)
+
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
@@ -267,12 +271,13 @@ class EyeTrackingWorker(QThread):
 
                 h, w = frame.shape[:2]
                 rgb  = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
-                res  = face_mesh.process(rgb)
+                image = Image(image_format=ImageFormat.SRGB, data=rgb)
+                res  = landmarker.detect(image)
 
-                if not res.multi_face_landmarks:
+                if not res.face_landmarks:
                     continue
 
-                lm = res.multi_face_landmarks[0].landmark
+                lm = res.face_landmarks[0]
 
                 # ── Iris centres ──────────────────────────────
                 l_iris = np.mean([[lm[i].x, lm[i].y] for i in LEFT_IRIS], axis=0)
@@ -319,7 +324,9 @@ class EyeTrackingWorker(QThread):
                 if self._dwell.update(screen_pos):
                     self.dwell_click.emit(x, y)
 
-        cap.release()
+        finally:
+            cap.release()
+            landmarker.close()
 
     def stop(self):
         self._running = False

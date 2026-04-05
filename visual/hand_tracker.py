@@ -173,11 +173,12 @@ class HandTrackingWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
+            from mediapipe.tasks.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+            from mediapipe import Image, ImageFormat
         except ImportError as e:
             self.error.emit(f"Missing dependency: {e}. Run: pip install opencv-python mediapipe")
             return
 
-        mp_hands = mp.solutions.hands
         self._running = True
 
         cap = cv2.VideoCapture(self.camera_index)
@@ -185,28 +186,33 @@ class HandTrackingWorker(QThread):
             self.error.emit(f"Cannot open camera {self.camera_index}")
             return
 
-        with mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=1,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.65,
-        ) as hands:
+        try:
+            options = HandLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                running_mode=RunningMode.IMAGE,
+                num_hands=1,
+                min_hand_detection_confidence=0.7,
+                min_hand_presence_confidence=0.65,
+            )
+            landmarker = HandLandmarker.create_from_options(options)
+
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     continue
 
                 frame_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
-                results   = hands.process(frame_rgb)
+                image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
+                results = landmarker.detect(image)
 
-                if not results.multi_hand_landmarks:
+                if not results.hand_landmarks:
                     if self._was_pinching:
                         if self._scroll_tracker.end():  # quick tap = click
                             self.click.emit(0.5, 0.5)
                         self._was_pinching = False
                     continue
 
-                hand = results.multi_hand_landmarks[0]
+                hand = results.hand_landmarks[0]
                 gesture = classify_gesture(hand)
 
                 # Index tip normalised position (cursor anchor)
@@ -243,7 +249,9 @@ class HandTrackingWorker(QThread):
                         self._gesture_cooldown[gesture] = now
                         self.gesture_detected.emit(gesture.value, ix, iy)
 
-        cap.release()
+        finally:
+            cap.release()
+            landmarker.close()
 
     def stop(self):
         self._running = False

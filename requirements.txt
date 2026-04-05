@@ -20,7 +20,7 @@ vosk>=0.3.45              # fallback offline wake word (no key needed)
 
 # Phase 3 — Visual input
 opencv-python>=4.9.0
-mediapipe>=0.10.9
+mediapipe==0.10.33
 onnxruntime>=1.17.0         # for ASL fingerspelling model
 pyautogui>=0.9.54           # cursor control fallback (Linux)
 python-xlib>=0.33           # cursor control on Linux/X11 (preferred)

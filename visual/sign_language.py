@@ -223,6 +223,8 @@ class SignLanguageWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
+            from mediapipe.tasks.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+            from mediapipe import Image, ImageFormat
         except ImportError as e:
             self.error.emit(f"Missing: {e}. Run: pip install opencv-python mediapipe")
             return
@@ -234,7 +236,6 @@ class SignLanguageWorker(QThread):
                 self.error.emit(f"ONNX model load failed: {e}. Using quick-actions only.")
                 self._mode = "quick_actions"
 
-        mp_hands = mp.solutions.hands
         self._running = True
 
         cap = cv2.VideoCapture(self.camera_index)
@@ -242,23 +243,30 @@ class SignLanguageWorker(QThread):
             self.error.emit(f"Cannot open camera {self.camera_index}")
             return
 
-        with mp_hands.Hands(
-            static_image_mode=False, max_num_hands=1,
-            min_detection_confidence=0.75, min_tracking_confidence=0.7,
-        ) as hands:
+        try:
+            options = HandLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                running_mode=RunningMode.IMAGE,
+                num_hands=1,
+                min_hand_detection_confidence=0.75,
+                min_hand_presence_confidence=0.7,
+            )
+            landmarker = HandLandmarker.create_from_options(options)
+
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     continue
 
                 rgb     = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
-                results = hands.process(rgb)
+                image = Image(image_format=ImageFormat.SRGB, data=rgb)
+                results = landmarker.detect(image)
 
-                if not results.multi_hand_landmarks:
+                if not results.hand_landmarks:
                     self._buffer.clear()
                     continue
 
-                hand = results.multi_hand_landmarks[0]
+                hand = results.hand_landmarks[0]
 
                 # ── Tier 1: quick-action signs ────────────────
                 if self._mode in ("quick_actions", "both"):
@@ -285,7 +293,9 @@ class SignLanguageWorker(QThread):
                         elif committed != "DEL":
                             self.letter_added.emit(committed)
 
-        cap.release()
+        finally:
+            cap.release()
+            landmarker.close()
 
     def stop(self):
         self._running = False
