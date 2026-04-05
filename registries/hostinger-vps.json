@@ -1,0 +1,73 @@
+{
+  "site": "https://www.hostinger.com/vps-hosting",
+  "name": "Hostinger VPS Hosting",
+  "functions": [
+    {
+      "name": "select_vps_plan",
+      "description": "Select a VPS hosting plan",
+      "params": {
+        "plan": "string - plan type (e.g., 'vps-1', 'vps-2', 'vps-3', 'vps-4')"
+      },
+      "action_type": "js",
+      "action": "document.querySelector(`[data-plan='${plan}']`)?.click() || document.querySelector(`.h-pricing-table:nth-of-type(${plan.replace('vps-', '')}) button`)?.click()"
+    },
+    {
+      "name": "toggle_billing_cycle",
+      "description": "Toggle between monthly and annual billing cycles",
+      "params": {},
+      "action_type": "js",
+      "action": "document.querySelector('.h-pricing-table__cycle-toggle')?.click() || document.querySelector('[data-testid=\"billing-toggle\"]')?.click()"
+    },
+    {
+      "name": "navigate_to_section",
+      "description": "Navigate to a specific section on the page",
+      "params": {
+        "section": "string - section name (e.g., 'features', 'pricing', 'reviews', 'faq')"
+      },
+      "action_type": "js",
+      "action": "document.querySelector(`#${section}`)?.scrollIntoView({behavior:'smooth'}) || document.querySelector(`[data-section='${section}']`)?.scrollIntoView({behavior:'smooth'})"
+    },
+    {
+      "name": "click_cta_button",
+      "description": "Click a call-to-action button",
+      "params": {
+        "action": "string - button action (e.g., 'add_to_cart', 'learn_more', 'get_started')"
+      },
+      "action_type": "js",
+      "action": "[...document.querySelectorAll('button, a.button')].find(b => b.textContent.toLowerCase().includes('add to cart') || b.textContent.toLowerCase().includes('get started') || b.textContent.toLowerCase().includes('order now'))?.click()"
+    },
+    {
+      "name": "view_carousel_item",
+      "description": "Navigate carousel to view specific item",
+      "params": {
+        "direction": "string - 'next' or 'prev'",
+        "item": "string - item number or feature name"
+      },
+      "action_type": "js",
+      "action": "document.querySelector('.h-carousel__button--next')?.click() || document.querySelector('[aria-label=\"Next\"]')?.click()"
+    },
+    {
+      "name": "expand_faq_item",
+      "description": "Expand an FAQ accordion item",
+      "params": {
+        "question": "string - FAQ question text or keyword"
+      },
+      "action_type": "js",
+      "action": "[...document.querySelectorAll('[data-testid=\"faq-item\"], .h-accordion, details')].find(f => f.textContent.toLowerCase().includes('{question}'.toLowerCase()))?.querySelector('button, summary')?.click()"
+    },
+    {
+      "name": "open_live_chat",
+      "description": "Open the live chat support widget",
+      "params": {},
+      "action_type": "js",
+      "action": "document.querySelector('[data-testid=\"chat-button\"], .chat-widget-button, [aria-label*=\"chat\"], [title*=\"Chat\"]')?.click()"
+    },
+    {
+      "name": "get_page_state",
+      "description": "Get current page state including pricing, plans, and available actions",
+      "params": {},
+      "action_type": "js",
+      "action": "JSON.stringify({url:window.location.href,title:document.title,plans:[...document.querySelectorAll('.h-pricing-table')].map(p=>p.textContent.trim().slice(0,200)),buttons:[...document.querySelectorAll('button')].map(b=>b.textContent.trim()).slice(0,20)})"
+    }
+  ]
+}
