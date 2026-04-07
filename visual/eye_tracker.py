@@ -24,10 +24,38 @@ Signals:
 """
 from __future__ import annotations
 import time
+import logging
 from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
+
+# ── Camera utilities ──────────────────────────────────────────────────────────
+
+def detect_available_cameras(max_cameras: int = 5) -> list[int]:
+    """Returns list of available camera indices."""
+    import cv2
+    available = []
+    for i in range(max_cameras):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            available.append(i)
+            # Log camera properties
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            logger.debug(f"Camera {i} detected: {int(width)}x{int(height)} @ {fps:.1f} FPS")
+            cap.release()
+        else:
+            logger.debug(f"Camera {i} not available")
+    logger.info(f"Available cameras: {available}")
+    return available
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -234,18 +262,37 @@ class EyeTrackingWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
-            from mediapipe.tasks.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
+            from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
             from mediapipe import Image, ImageFormat
         except ImportError as e:
-            self.error.emit(f"Missing: {e}. Run: pip install opencv-python mediapipe")
+            msg = f"Missing: {e}. Run: pip install opencv-python mediapipe"
+            logger.error(msg)
+            self.error.emit(msg)
             return
 
         self._running = True
 
+        # Detect and display available cameras
+        available_cameras = detect_available_cameras()
+        if self.camera_index not in available_cameras:
+            msg = f"Camera {self.camera_index} not available. Available: {available_cameras}"
+            logger.error(msg)
+            self.error.emit(msg)
+            return
+
+        logger.info(f"Starting eye tracking on camera {self.camera_index}")
+
         cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
-            self.error.emit(f"Cannot open camera {self.camera_index}")
+            msg = f"Cannot open camera {self.camera_index}"
+            logger.error(msg)
+            self.error.emit(msg)
             return
+
+        # Log camera properties
+        logger.debug(f"Camera {self.camera_index} properties:")
+        logger.debug(f"  Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        logger.debug(f"  FPS: {cap.get(cv2.CAP_PROP_FPS)}")
 
         # Iris landmark indices (MediaPipe FaceMesh with refine_landmarks=True)
         LEFT_IRIS  = [474, 475, 476, 477]
@@ -256,9 +303,10 @@ class EyeTrackingWorker(QThread):
         R_INNER = 133
         R_OUTER = 33
 
+        landmarker = None
         try:
             options = FaceLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                base_options=mp.tasks.BaseOptions(model_asset_path="models/face_landmarker.task"),
                 running_mode=RunningMode.IMAGE,
                 output_face_blendshapes=False,
             )
@@ -283,17 +331,19 @@ class EyeTrackingWorker(QThread):
                 l_iris = np.mean([[lm[i].x, lm[i].y] for i in LEFT_IRIS], axis=0)
                 r_iris = np.mean([[lm[i].x, lm[i].y] for i in RIGHT_IRIS], axis=0)
 
-                # ── Normalise by eye width ────────────────────
+                # ── Normalise by eye width/height ─────────────
                 l_width = abs(lm[L_OUTER].x - lm[L_INNER].x) + 1e-8
                 r_width = abs(lm[R_OUTER].x - lm[R_INNER].x) + 1e-8
+                l_height = abs(lm[374].y - lm[386].y) + 1e-8  # top-to-bottom
+                r_height = abs(lm[145].y - lm[159].y) + 1e-8
 
                 l_norm = np.array([
                     (l_iris[0] - lm[L_INNER].x) / l_width,
-                    l_iris[1] - (lm[362].y + lm[374].y) / 2,
+                    (l_iris[1] - lm[362].y) / l_height,
                 ])
                 r_norm = np.array([
                     (r_iris[0] - lm[R_INNER].x) / r_width,
-                    r_iris[1] - (lm[133].y + lm[145].y) / 2,
+                    (r_iris[1] - lm[133].y) / r_height,
                 ])
 
                 raw_gaze = (l_norm + r_norm) / 2
@@ -324,9 +374,35 @@ class EyeTrackingWorker(QThread):
                 if self._dwell.update(screen_pos):
                     self.dwell_click.emit(x, y)
 
+                # ── Draw crosshair on frame ───────────────────
+                frame_display = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                px = int(x * w)
+                py = int(y * h)
+
+                # Crosshair parameters (thinner, smaller)
+                crosshair_size = 8
+                crosshair_color = (0, 255, 0)  # Green
+                crosshair_thickness = 1
+
+                # Draw thin crosshair
+                cv2.line(frame_display, (px - crosshair_size, py), (px + crosshair_size, py), crosshair_color, crosshair_thickness)
+                cv2.line(frame_display, (px, py - crosshair_size), (px, py + crosshair_size), crosshair_color, crosshair_thickness)
+                cv2.circle(frame_display, (px, py), 2, crosshair_color, 1)
+
+                # Draw text info
+                info_text = f"Camera: {self.camera_index} | Gaze: ({x:.2f}, {y:.2f})"
+                cv2.putText(frame_display, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # Display
+                cv2.imshow(f"Eye Tracker - Camera {self.camera_index}", frame_display)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
         finally:
             cap.release()
-            landmarker.close()
+            if landmarker:
+                landmarker.close()
+            logger.info(f"Eye tracking stopped (camera {self.camera_index})")
 
     def stop(self):
         self._running = False

@@ -20,11 +20,39 @@ high-level gesture events via Qt signals.
 """
 from __future__ import annotations
 import time
+import logging
 from enum import Enum, auto
 from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
+
+# ── Camera utilities ──────────────────────────────────────────────────────────
+
+def detect_available_cameras(max_cameras: int = 5) -> list[int]:
+    """Returns list of available camera indices."""
+    import cv2
+    available = []
+    for i in range(max_cameras):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            available.append(i)
+            # Log camera properties
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            logger.debug(f"Camera {i} detected: {int(width)}x{int(height)} @ {fps:.1f} FPS")
+            cap.release()
+        else:
+            logger.debug(f"Camera {i} not available")
+    logger.info(f"Available cameras: {available}")
+    return available
 
 
 class Gesture(str, Enum):
@@ -55,10 +83,12 @@ def _finger_extended(lms, tip_idx: int, pip_idx: int) -> bool:
 def classify_gesture(hand_landmarks) -> Gesture:
     """
     Map 21 MediaPipe hand landmarks → Gesture enum.
+    New Tasks API: hand_landmarks is a list of NormalizedLandmark objects.
     Landmarks: 0=wrist, 4=thumb_tip, 8=index_tip, 12=mid_tip, 16=ring_tip, 20=pinky_tip
                3=thumb_ip,  6=index_pip, 10=mid_pip, 14=ring_pip, 18=pinky_pip
     """
-    lm = hand_landmarks.landmark
+    # hand_landmarks is now a list, not an object with .landmark
+    lm = hand_landmarks
 
     # ── Pinch (thumb ↔ index distance) ───────────────────────
     pinch_dist = _dist(lm[4], lm[8])
@@ -173,22 +203,42 @@ class HandTrackingWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
-            from mediapipe.tasks.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+            from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
             from mediapipe import Image, ImageFormat
         except ImportError as e:
-            self.error.emit(f"Missing dependency: {e}. Run: pip install opencv-python mediapipe")
+            msg = f"Missing dependency: {e}. Run: pip install opencv-python mediapipe"
+            logger.error(msg)
+            self.error.emit(msg)
             return
 
         self._running = True
 
-        cap = cv2.VideoCapture(self.camera_index)
-        if not cap.isOpened():
-            self.error.emit(f"Cannot open camera {self.camera_index}")
+        # Detect and display available cameras
+        available_cameras = detect_available_cameras()
+        if self.camera_index not in available_cameras:
+            msg = f"Camera {self.camera_index} not available. Available: {available_cameras}"
+            logger.error(msg)
+            self.error.emit(msg)
             return
 
+        logger.info(f"Starting hand tracking on camera {self.camera_index}")
+
+        cap = cv2.VideoCapture(self.camera_index)
+        if not cap.isOpened():
+            msg = f"Cannot open camera {self.camera_index}"
+            logger.error(msg)
+            self.error.emit(msg)
+            return
+
+        # Log camera properties
+        logger.debug(f"Camera {self.camera_index} properties:")
+        logger.debug(f"  Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        logger.debug(f"  FPS: {cap.get(cv2.CAP_PROP_FPS)}")
+
+        landmarker = None
         try:
             options = HandLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                base_options=mp.tasks.BaseOptions(model_asset_path="models/hand_landmarker.task"),
                 running_mode=RunningMode.IMAGE,
                 num_hands=1,
                 min_hand_detection_confidence=0.7,
@@ -216,12 +266,12 @@ class HandTrackingWorker(QThread):
                 gesture = classify_gesture(hand)
 
                 # Index tip normalised position (cursor anchor)
-                ix = hand.landmark[8].x
-                iy = hand.landmark[8].y
+                ix = hand[8].x
+                iy = hand[8].y
 
                 # ── Pinch / scroll ────────────────────────────
                 if gesture == Gesture.PINCH_START:
-                    pinch_y = (hand.landmark[4].y + hand.landmark[8].y) / 2
+                    pinch_y = (hand[4].y + hand[8].y) / 2
                     if not self._was_pinching:
                         self._scroll_tracker.begin(pinch_y)
                         self._was_pinching = True
@@ -251,7 +301,9 @@ class HandTrackingWorker(QThread):
 
         finally:
             cap.release()
-            landmarker.close()
+            if landmarker:
+                landmarker.close()
+            logger.info(f"Hand tracking stopped (camera {self.camera_index})")
 
     def stop(self):
         self._running = False

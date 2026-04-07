@@ -15,6 +15,7 @@ OS cursor control uses platform-appropriate method:
 from __future__ import annotations
 import platform
 import sys
+import logging
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
@@ -22,6 +23,10 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from visual.hand_tracker import HandTracker
 from visual.eye_tracker import EyeTracker
 from visual.sign_language import SignLanguageInterpreter
+from visual.logging_config import setup_logging
+
+# Initialize logging on module import
+logger = logging.getLogger(__name__)
 
 
 class CursorController:
@@ -120,6 +125,11 @@ class VisualCoordinator(QObject):
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
+
+        # Initialize logging
+        setup_logging("eye_tracking_debug.log")
+        logger.info("VisualCoordinator initialized")
+
         self.settings = settings
         self._cursor  = CursorController()
 

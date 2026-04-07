@@ -28,10 +28,38 @@ Quick-action vocabulary (subset of ASL):
 """
 from __future__ import annotations
 import time
+import logging
 from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
+
+# ── Camera utilities ──────────────────────────────────────────────────────────
+
+def detect_available_cameras(max_cameras: int = 5) -> list[int]:
+    """Returns list of available camera indices."""
+    import cv2
+    available = []
+    for i in range(max_cameras):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            available.append(i)
+            # Log camera properties
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            logger.debug(f"Camera {i} detected: {int(width)}x{int(height)} @ {fps:.1f} FPS")
+            cap.release()
+        else:
+            logger.debug(f"Camera {i} not available")
+    logger.info(f"Available cameras: {available}")
+    return available
 
 
 # ── ASL quick-action classifier ───────────────────────────────────────────────
@@ -132,7 +160,8 @@ class FingerspellingClassifier:
 
     def predict(self, hand_landmarks) -> tuple[str, float]:
         """Returns (letter, confidence)."""
-        lm = hand_landmarks.landmark
+        # hand_landmarks is now a list of NormalizedLandmark objects
+        lm = hand_landmarks
         vec = np.array([[l.x, l.y, l.z] for l in lm], dtype=np.float32).flatten()
 
         # Normalise: subtract wrist, scale by hand size
@@ -223,29 +252,51 @@ class SignLanguageWorker(QThread):
         try:
             import cv2
             import mediapipe as mp
-            from mediapipe.tasks.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+            from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
             from mediapipe import Image, ImageFormat
         except ImportError as e:
-            self.error.emit(f"Missing: {e}. Run: pip install opencv-python mediapipe")
+            msg = f"Missing: {e}. Run: pip install opencv-python mediapipe"
+            logger.error(msg)
+            self.error.emit(msg)
             return
 
         if self._mode in ("fingerspelling", "both") and self._model_path:
             try:
                 self._classifier = FingerspellingClassifier(self._model_path)
+                logger.info(f"ONNX model loaded: {self._model_path}")
             except Exception as e:
-                self.error.emit(f"ONNX model load failed: {e}. Using quick-actions only.")
+                msg = f"ONNX model load failed: {e}. Using quick-actions only."
+                logger.warning(msg)
+                self.error.emit(msg)
                 self._mode = "quick_actions"
 
         self._running = True
+        logger.info(f"Starting sign language ({self._mode}) on camera {self.camera_index}")
+
+        # Detect and display available cameras
+        available_cameras = detect_available_cameras()
+        if self.camera_index not in available_cameras:
+            msg = f"Camera {self.camera_index} not available. Available: {available_cameras}"
+            logger.error(msg)
+            self.error.emit(msg)
+            return
 
         cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
-            self.error.emit(f"Cannot open camera {self.camera_index}")
+            msg = f"Cannot open camera {self.camera_index}"
+            logger.error(msg)
+            self.error.emit(msg)
             return
 
+        # Log camera properties
+        logger.debug(f"Camera {self.camera_index} properties:")
+        logger.debug(f"  Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        logger.debug(f"  FPS: {cap.get(cv2.CAP_PROP_FPS)}")
+
+        landmarker = None
         try:
             options = HandLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=""),
+                base_options=mp.tasks.BaseOptions(model_asset_path="models/hand_landmarker.task"),
                 running_mode=RunningMode.IMAGE,
                 num_hands=1,
                 min_hand_detection_confidence=0.75,
@@ -270,7 +321,7 @@ class SignLanguageWorker(QThread):
 
                 # ── Tier 1: quick-action signs ────────────────
                 if self._mode in ("quick_actions", "both"):
-                    sign = classify_asl_quick(hand.landmark)
+                    sign = classify_asl_quick(hand)
                     if sign:
                         now  = time.time()
                         last = self._cooldown.get(sign, 0)
@@ -295,7 +346,9 @@ class SignLanguageWorker(QThread):
 
         finally:
             cap.release()
-            landmarker.close()
+            if landmarker:
+                landmarker.close()
+            logger.info(f"Sign language stopped (camera {self.camera_index})")
 
     def stop(self):
         self._running = False
