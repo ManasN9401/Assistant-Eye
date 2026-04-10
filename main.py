@@ -124,7 +124,24 @@ def main():
     voice.error.connect(lambda msg: panel._dashboard.append_token(f"\n[ERROR] {msg}\n"))
     
     def _on_action_detected(fn_def, params):
-        log.debug("Action detected: %s %s", fn_def.get('name'), params)
+        action_name = fn_def.get('name') or fn_def.get('action')
+        log.debug("Action detected: %s %s", action_name, params)
+        
+        if action_name == "toggle_hand_tracking":
+            enabled = params.get("enable", True)
+            if isinstance(enabled, str):
+                enabled = enabled.lower() == "true"
+                
+            if enabled:
+                visual.start_hand_tracking(settings.get("visual_camera", 0))
+                panel._visual_page._hand_enable.setChecked(True)
+                voice.tts.speak("Hand tracking enabled")
+            else:
+                visual.stop_hand_tracking()
+                panel._visual_page._hand_enable.setChecked(False)
+                voice.tts.speak("Hand tracking disabled")
+            return
+            
         result = executor.execute_action(fn_def, params)
         log.debug("Action execution result: %s", result)
         voice.tts.speak(result)
@@ -140,24 +157,6 @@ def main():
     visual.action_stop_speaking.connect(voice.tts.stop)
     visual.action_confirm.connect(lambda: voice.send_text("yes, confirm"))
     visual.action_cancel.connect(lambda: voice.send_text("cancel"))
-
-    def _on_sign_command(action: str):
-        sign_map = {
-            "trigger_listen":  voice.trigger_listen,
-            "open_overlay":    overlay.show,
-            "stop_speaking":   voice.tts.stop,
-            "confirm":         lambda: voice.send_text("confirm"),
-            "cancel":          voice.stop,
-            "go_to_docs":      lambda: voice.send_text("go to the docs page"),
-            "open_search":     lambda: voice.send_text("open search"),
-            "navigate":        overlay.show,
-        }
-        fn = sign_map.get(action)
-        if fn:
-            fn()
-
-    visual.sign_command.connect(_on_sign_command)
-    visual.sign_word.connect(voice.send_text)
 
     # Settings refresh
     panel._settings_page.settings_changed.connect(overlay.refresh_name)

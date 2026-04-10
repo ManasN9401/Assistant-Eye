@@ -26,6 +26,7 @@ from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtGui import QImage
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -64,7 +65,8 @@ class Gesture(str, Enum):
     OPEN_PALM    = "open_palm"
     FIST         = "fist"
     THUMBS_UP    = "thumbs_up"
-    SNAP         = "snap"
+    CLAP         = "clap"
+    BOTH_PALMS   = "both_palms"
     VICTORY      = "victory"
     CALL_ME      = "call_me"
 
@@ -82,13 +84,36 @@ def _finger_extended(lms, tip_idx: int, pip_idx: int) -> bool:
 
 def classify_gesture(hand_landmarks) -> Gesture:
     """
-    Map 21 MediaPipe hand landmarks → Gesture enum.
-    New Tasks API: hand_landmarks is a list of NormalizedLandmark objects.
-    Landmarks: 0=wrist, 4=thumb_tip, 8=index_tip, 12=mid_tip, 16=ring_tip, 20=pinky_tip
-               3=thumb_ip,  6=index_pip, 10=mid_pip, 14=ring_pip, 18=pinky_pip
+    Map MediaPipe hand landmarks → Gesture enum.
+    hand_landmarks is a list of hand landmarks (each an array of 21 landmarks).
     """
-    # hand_landmarks is now a list, not an object with .landmark
-    lm = hand_landmarks
+    if not hand_landmarks: return Gesture.NONE
+
+    # ── Two-Hand Gestures ──────────────────────────────────────────────
+    if len(hand_landmarks) == 2:
+        h1 = hand_landmarks[0]
+        h2 = hand_landmarks[1]
+        
+        # CLAP: distance between hands is small (palm to palm / tip to tip)
+        wrist_dist = _dist(h1[0], h2[0])
+        mid_dist = _dist(h1[12], h2[12])
+        if wrist_dist < 0.15 and mid_dist < 0.15:
+            return Gesture.CLAP
+            
+        def _is_open_palm(lm):
+            thumb_up   = lm[4].y < lm[3].y
+            index_ext  = _finger_extended(lm, 8, 6)
+            mid_ext    = _finger_extended(lm, 12, 10)
+            ring_ext   = _finger_extended(lm, 16, 14)
+            pinky_ext  = _finger_extended(lm, 20, 18)
+            return index_ext and mid_ext and ring_ext and pinky_ext and thumb_up
+
+        if _is_open_palm(h1) and _is_open_palm(h2):
+            return Gesture.BOTH_PALMS
+
+    # ── Single-Hand Gestures ───────────────────────────────────────────
+    # For single hand evaluations, use the first dominant hand
+    lm = hand_landmarks[0]
 
     # ── Pinch (thumb ↔ index distance) ───────────────────────
     pinch_dist = _dist(lm[4], lm[8])
@@ -100,11 +125,6 @@ def classify_gesture(hand_landmarks) -> Gesture:
     mid_ext    = _finger_extended(lm, 12, 10)
     ring_ext   = _finger_extended(lm, 16, 14)
     pinky_ext  = _finger_extended(lm, 20, 18)
-
-    # ── Snap: middle finger + thumb pinch ────────────────────
-    snap_dist = _dist(lm[4], lm[12])
-    if snap_dist < 0.05 and not index_ext and not ring_ext:
-        return Gesture.SNAP
 
     # ── Pinch (index + thumb) ─────────────────────────────────
     if is_pinching and not mid_ext and not ring_ext:
@@ -186,6 +206,7 @@ class HandTrackingWorker(QThread):
     # click at current position
     click            = pyqtSignal(float, float)
     error            = pyqtSignal(str)
+    frame_processed  = pyqtSignal(object)  # Emits QImage
 
     def __init__(self, settings, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -196,8 +217,12 @@ class HandTrackingWorker(QThread):
             sensitivity=float(settings.get("hand_scroll_sensitivity", 1800))
         )
         self._was_pinching   = False
-        self._gesture_cooldown: dict[str, float] = {}
-        self._cooldown_sec = 0.6   # min seconds between same gesture fires
+        self._last_discrete_gesture = Gesture.NONE
+        self._gesture_buffer = []  # For temporal smoothing
+        self._buffer_size_requirement = 5
+        self._ema_x: Optional[float] = None
+        self._ema_y: Optional[float] = None
+        self._ema_alpha = 0.35
 
     def run(self):
         try:
@@ -240,16 +265,23 @@ class HandTrackingWorker(QThread):
             options = HandLandmarkerOptions(
                 base_options=mp.tasks.BaseOptions(model_asset_path="models/hand_landmarker.task"),
                 running_mode=RunningMode.IMAGE,
-                num_hands=1,
+                num_hands=2,
                 min_hand_detection_confidence=0.7,
                 min_hand_presence_confidence=0.65,
             )
             landmarker = HandLandmarker.create_from_options(options)
 
+            last_proc_time = 0.0
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     continue
+
+                now = time.time()
+                # Frame skip to prevent lag (limit to ~20FPS)
+                if now - last_proc_time < 0.05:
+                    continue
+                last_proc_time = now
 
                 frame_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
@@ -260,10 +292,36 @@ class HandTrackingWorker(QThread):
                         if self._scroll_tracker.end():  # quick tap = click
                             self.click.emit(0.5, 0.5)
                         self._was_pinching = False
+                    
+                    self._gesture_buffer.clear()
+                    self._last_discrete_gesture = Gesture.NONE
+                    h, w, ch = frame_rgb.shape
+                    qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                    self.frame_processed.emit(qimg)
                     continue
 
+                # Parse first hand for 2D coords (for scrolling/pointing)
                 hand = results.hand_landmarks[0]
-                gesture = classify_gesture(hand)
+                
+                # We now pass the entire list of hands to support 2-hand gestures
+                gesture = classify_gesture(results.hand_landmarks)
+                
+                ix = hand[8].x  # index tip x
+                iy = hand[8].y  # index tip y
+                
+                cx, cy = int(ix * w), int(iy * h)
+
+                # Draw landmarks for ALL detected hands over the camera feed output
+                for h_lms in results.hand_landmarks:
+                    for lm in h_lms:
+                        jx, jy = int(lm.x * w), int(lm.y * h)
+                        cv2.circle(frame_rgb, (jx, jy), 4, (200, 100, 255), -1)
+                
+                cv2.putText(frame_rgb, f"Gesture: {gesture.value}", (15, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                
+                qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                self.frame_processed.emit(qimg)
 
                 # Index tip normalised position (cursor anchor)
                 ix = hand[8].x
@@ -286,18 +344,35 @@ class HandTrackingWorker(QThread):
                         self.click.emit(ix, iy)
                     self._was_pinching = False
 
-                # ── Cursor control (point gesture) ─────────────
+                # ── Point cursor move (with EMA smoothing) ────────────
                 if gesture == Gesture.POINT:
-                    self.cursor_move.emit(ix, iy)
+                    if self._ema_x is None:
+                        self._ema_x = ix
+                        self._ema_y = iy
+                    else:
+                        self._ema_x = (self._ema_alpha * ix) + ((1 - self._ema_alpha) * self._ema_x)
+                        self._ema_y = (self._ema_alpha * iy) + ((1 - self._ema_alpha) * self._ema_y)
+                    self.cursor_move.emit(self._ema_x, self._ema_y)
                     continue
+                else:
+                    self._ema_x = None  # Reset EMA if gesture changes
+                    self._ema_y = None
 
-                # ── Discrete gestures (with cooldown) ──────────
+                # ── Discrete gestures (with temporal smoothing buffer) ──────────
                 if gesture not in (Gesture.NONE, Gesture.POINT, Gesture.PINCH_START):
-                    now = time.time()
-                    last = self._gesture_cooldown.get(gesture, 0)
-                    if now - last > self._cooldown_sec:
-                        self._gesture_cooldown[gesture] = now
-                        self.gesture_detected.emit(gesture.value, ix, iy)
+                    self._gesture_buffer.append(gesture)
+                    if len(self._gesture_buffer) > self._buffer_size_requirement:
+                        self._gesture_buffer.pop(0)
+                        
+                    # Only trigger if the buffer is full and entirely homogeneous 
+                    if len(self._gesture_buffer) == self._buffer_size_requirement and all(g == gesture for g in self._gesture_buffer):
+                        if gesture != self._last_discrete_gesture:
+                            self._last_discrete_gesture = gesture
+                            logger.debug(f"[HandTracker] Detected gesture: {gesture.value}")
+                            self.gesture_detected.emit(gesture.value, ix, iy)
+                else:
+                    self._gesture_buffer.clear()
+                    self._last_discrete_gesture = gesture
 
         finally:
             cap.release()
@@ -328,6 +403,7 @@ class HandTracker(QObject):
     action_confirm       = pyqtSignal()
     action_cancel        = pyqtSignal()
     action_stop_speaking = pyqtSignal()
+    frame_processed      = pyqtSignal(object)
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -335,21 +411,33 @@ class HandTracker(QObject):
         self._worker: Optional[HandTrackingWorker] = None
 
     def start(self, camera_index: int = 0):
-        if self._worker and self._worker.isRunning():
-            return
+        if self._worker:
+            if self._worker.isRunning():
+                return
+            self._worker.deleteLater()
+            
         self._worker = HandTrackingWorker(self.settings, camera_index, self)
         self._worker.gesture_detected.connect(self._on_gesture)
         self._worker.scroll.connect(self.scroll)
         self._worker.cursor_move.connect(self.cursor_move)
         self._worker.click.connect(self.click)
         self._worker.error.connect(self.error)
+        self._worker.frame_processed.connect(self.frame_processed)
         self._worker.start()
 
     def stop(self):
         if self._worker:
             self._worker.stop()
             self._worker.quit()
-            self._worker.wait(2000)
+            if not self._worker.wait(2000):
+                if not hasattr(self, "_zombies"):
+                    self._zombies = []
+                self._zombies.append(self._worker)
+                import logging
+                logging.getLogger(__name__).warning("HandTrackingWorker failed to exit cleanly; moving to zombies.")
+            else:
+                self._worker.deleteLater()
+            self._worker = None
 
     @property
     def is_running(self) -> bool:
@@ -360,7 +448,8 @@ class HandTracker(QObject):
 
         # Map gestures to high-level actions
         mapping = {
-            Gesture.SNAP.value:      self.action_open_overlay,
+            Gesture.CLAP.value:      self.action_open_overlay,
+            Gesture.BOTH_PALMS.value: self.action_open_overlay, # optional alias
             Gesture.FIST.value:      self.action_close_overlay,
             Gesture.THUMBS_UP.value: self.action_confirm,
             Gesture.CALL_ME.value:   self.action_cancel,

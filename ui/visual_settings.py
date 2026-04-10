@@ -35,7 +35,6 @@ class VisualSettingsPage(QWidget):
     # Signals to main window
     toggle_hand_tracking = pyqtSignal(bool)
     toggle_eye_tracking  = pyqtSignal(bool)
-    toggle_sign_language = pyqtSignal(bool)
     start_calibration    = pyqtSignal()
     advance_calibration  = pyqtSignal()
     settings_changed     = pyqtSignal()
@@ -66,7 +65,7 @@ class VisualSettingsPage(QWidget):
 
         vb.addWidget(_label("Visual Input", "section-title"))
         vb.addWidget(_label(
-            "Camera-based hand tracking, eye tracking, and sign language.",
+            "Camera-based hand tracking and eye tracking.",
             "section-sub"
         ))
 
@@ -114,9 +113,8 @@ class VisualSettingsPage(QWidget):
             "color:#71717a; font-size:11px; font-family:'Courier New',monospace; }"
         )
         gesture_info.setPlainText(
-            "SNAP (middle+thumb pinch)  → Open overlay\n"
-            "FIST                       → Close overlay\n"
-            "THUMBS UP                  → Confirm action\n"
+            "SNAP (middle+thumb pinch)  → Confirm action\n"
+            "CLAP (both hands clap)     → Open/Close overlay\n"
             "OPEN PALM                  → Stop speaking\n"
             "CALL ME (thumb+pinky)      → Cancel\n"
             "PINCH + move up/down       → Scroll page\n"
@@ -165,49 +163,6 @@ class VisualSettingsPage(QWidget):
 
         vb.addWidget(_divider())
 
-        # ── Sign language ─────────────────────────────────────
-        vb.addWidget(_label("Sign Language", "card-title"))
-
-        self._sign_enable = QCheckBox("Enable sign language input")
-        self._sign_enable.setChecked(self.settings.get("sign_language_active", False))
-        self._sign_enable.toggled.connect(self.toggle_sign_language)
-        vb.addWidget(self._sign_enable)
-
-        vb.addWidget(_label("Mode", "label-field"))
-        self._sign_mode = QComboBox()
-        self._sign_mode.addItem("Quick actions only (no model needed)", "quick_actions")
-        self._sign_mode.addItem("Full ASL fingerspelling (needs ONNX model)", "fingerspelling")
-        self._sign_mode.addItem("Both — actions + spelling", "both")
-        idx = self._sign_mode.findData(self.settings.get("sign_mode", "quick_actions"))
-        self._sign_mode.setCurrentIndex(max(0, idx))
-        vb.addWidget(self._sign_mode)
-
-        vb.addWidget(_label("ONNX model path (fingerspelling only)", "label-field"))
-        self._model_path = QLineEdit(self.settings.get("sign_model_path", ""))
-        self._model_path.setPlaceholderText("assets/asl_landmarks.onnx")
-        vb.addWidget(self._model_path)
-
-        # Sign reference
-        vb.addWidget(_label("Quick-action sign reference", "label-field"))
-        sign_info = QTextEdit()
-        sign_info.setReadOnly(True)
-        sign_info.setMaximumHeight(110)
-        sign_info.setStyleSheet(
-            "QTextEdit { background:#0a0a0d; border:1px solid #1f1f26; "
-            "color:#71717a; font-size:11px; font-family:'Courier New',monospace; }"
-        )
-        sign_info.setPlainText(
-            "ASL A (fist, thumb side)      → Confirm\n"
-            "ASL B (flat hand, fingers up) → Stop speaking\n"
-            "ASL C (curved hand)           → Cancel\n"
-            "ASL D (index up, thumb-mid)   → Go to docs\n"
-            "ASL G (index sideways)        → Navigate\n"
-            "ASL L (thumb+index 90°)       → Listen\n"
-            "ASL S (fist, thumb over)      → Search\n"
-            "ASL Y (thumb+pinky)           → Open overlay"
-        )
-        vb.addWidget(sign_info)
-
         vb.addWidget(_divider())
 
         save_btn = QPushButton("Save Visual Settings")
@@ -225,9 +180,6 @@ class VisualSettingsPage(QWidget):
             "hand_tracking_active":   self._hand_enable.isChecked(),
             "eye_tracking_active":    self._eye_enable.isChecked(),
             "eye_dwell_sec":          self._dwell.value() / 10.0,
-            "sign_language_active":   self._sign_enable.isChecked(),
-            "sign_mode":              self._sign_mode.currentData(),
-            "sign_model_path":        self._model_path.text().strip(),
         })
         self.settings_changed.emit()
 

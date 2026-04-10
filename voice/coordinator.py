@@ -232,6 +232,9 @@ class VoiceCoordinator(QObject):
             return None, text
 
     def _find_function(self, name: str) -> Optional[dict]:
+        if name in ["toggle_hand_tracking"]:
+            return {"name": name, "type": "system", "description": "System built-in command"}
+            
         reg = self.registry.get_active()
         if not reg:
             return None

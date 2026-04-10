@@ -119,6 +119,13 @@ class Overlay(QWidget):
         self._name_lbl.setFixedWidth(70)
         pill_layout.addWidget(self._name_lbl)
 
+        # Sign Language Indicator
+        self._sign_icon = QLabel("🤟")
+        self._sign_icon.setFont(QFont("Segoe UI Emoji", 12))
+        self._sign_icon.setStyleSheet("color: #22c55e;")
+        self._sign_icon.setVisible(False)
+        pill_layout.addWidget(self._sign_icon)
+
         # Separator
         sep = QLabel("|")
         sep.setStyleSheet("color: #27272a;")
@@ -348,6 +355,10 @@ class Overlay(QWidget):
             colors = {"idle":"#52525b","ready":"#22c55e","thinking":"#e8a020"}
             col = colors.get(state_map.get(state,"idle"), "#52525b")
             self._dot.setStyleSheet(f"color: {col};")
+
+    def set_sign_language_mode(self, active: bool):
+        """Show or hide the sign language indicator."""
+        self._sign_icon.setVisible(active)
 
     def show_transcription(self, text: str):
         """Display what was heard above the response."""

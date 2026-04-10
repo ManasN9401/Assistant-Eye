@@ -161,9 +161,11 @@ class FunctionRegistry:
         name = self.settings.assistant_name
         site_name = self._active.get("name", "this website")
         functions = self.get_function_descriptions()
+        system_functions = "- toggle_hand_tracking(enable: boolean): Turn visual hand gesture tracking on or off"
         return (
             f"You are {name}, an assistant integrated into {site_name}.\n"
-            f"Available actions:\n{functions}\n\n"
+            f"Available website actions:\n{functions}\n"
+            f"Available system actions:\n{system_functions}\n\n"
             "When the user asks you to do something, reply with a JSON block "
             "on its own line: {\"action\": \"<name>\", \"params\": {\"key\": \"value\"}} "
             "followed by a short confirmation message. "

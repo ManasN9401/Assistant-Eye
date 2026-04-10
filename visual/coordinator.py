@@ -22,7 +22,6 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 from visual.hand_tracker import HandTracker
 from visual.eye_tracker import EyeTracker
-from visual.sign_language import SignLanguageInterpreter
 from visual.logging_config import setup_logging
 
 # Initialize logging on module import
@@ -112,8 +111,7 @@ class VisualCoordinator(QObject):
     action_confirm       = pyqtSignal()
     action_cancel        = pyqtSignal()
     action_stop_speaking = pyqtSignal()
-    sign_command         = pyqtSignal(str)    # e.g. "go_to_docs", "trigger_listen"
-    sign_word            = pyqtSignal(str)    # fingerspelled word
+    frame_processed      = pyqtSignal(object) # QImage feed from cameras
 
     # Status
     error  = pyqtSignal(str)
@@ -135,11 +133,13 @@ class VisualCoordinator(QObject):
 
         self.hand_tracker = HandTracker(settings, self)
         self.eye_tracker  = EyeTracker(settings, self)
-        self.sign_lang    = SignLanguageInterpreter(settings, self)
 
         # Gaze cursor throttle — don't move cursor every frame
         self._last_cursor_move = 0.0
         self._cursor_interval  = 1 / 30   # max 30Hz
+        
+        self.sign_language_active = False
+        self._current_camera = self.settings.get("visual_camera", 0)
 
         self._wire()
 
@@ -163,6 +163,7 @@ class VisualCoordinator(QObject):
         )
 
         self.hand_tracker.error.connect(self.error)
+        self.hand_tracker.frame_processed.connect(self.frame_processed)
 
         # Eye gaze → cursor (throttled)
         self.eye_tracker.gaze_point.connect(self._on_gaze)
@@ -175,11 +176,6 @@ class VisualCoordinator(QObject):
         self.eye_tracker.calibration_progress.connect(self.calibration_progress)
         self.eye_tracker.calibration_complete.connect(self.calibration_complete)
         self.eye_tracker.error.connect(self.error)
-
-        # Sign language
-        self.sign_lang.quick_action.connect(self.sign_command)
-        self.sign_lang.word_complete.connect(self.sign_word)
-        self.sign_lang.error.connect(self.error)
 
     # ── Throttled handlers ────────────────────────────────────────────────────
 
@@ -201,6 +197,7 @@ class VisualCoordinator(QObject):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start_hand_tracking(self, camera: int = 0):
+        self._current_camera = camera
         self.hand_tracker.start(camera)
         self.status.emit("Hand tracking active")
 
@@ -216,15 +213,6 @@ class VisualCoordinator(QObject):
         self.eye_tracker.stop()
         self.status.emit("Eye tracking stopped")
 
-    def start_sign_language(self, camera: int = 0):
-        self.sign_lang.start(camera)
-        mode = self.settings.get("sign_mode", "quick_actions")
-        self.status.emit(f"Sign language active ({mode} mode)")
-
-    def stop_sign_language(self):
-        self.sign_lang.stop()
-        self.status.emit("Sign language stopped")
-
     def start_calibration(self):
         self.eye_tracker.start_calibration()
         self.status.emit("Calibration started — look at each dot and press advance")
@@ -235,7 +223,6 @@ class VisualCoordinator(QObject):
     def stop_all(self):
         self.hand_tracker.stop()
         self.eye_tracker.stop()
-        self.sign_lang.stop()
 
     @property
     def hand_active(self) -> bool:
@@ -244,7 +231,3 @@ class VisualCoordinator(QObject):
     @property
     def eye_active(self) -> bool:
         return self.eye_tracker.is_running
-
-    @property
-    def sign_active(self) -> bool:
-        return self.sign_lang.is_running

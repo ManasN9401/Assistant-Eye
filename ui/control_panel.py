@@ -18,6 +18,7 @@ from core.ai_engine import AIEngine
 from core.function_registry import FunctionRegistry
 from ui.voice_settings import VoiceSettingsPage
 from ui.visual_settings import VisualSettingsPage
+from PyQt6.QtGui import QPixmap
 
 
 # ── Worker thread for AI calls ────────────────────────────────────────────────
@@ -350,6 +351,42 @@ class FunctionsPage(QWidget):
                 self.registry_loaded.emit()
 
 
+class CameraViewPage(QWidget):
+    def __init__(self, settings):
+        super().__init__()
+        self.settings = settings
+        self._is_updating = False
+        self._build()
+
+    def _build(self):
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(28, 28, 28, 28)
+        vb.setSpacing(14)
+        vb.addWidget(_label("Camera Feed", "section-title"))
+        vb.addWidget(_label("Real-time visual processing debugger.", "section-sub"))
+
+        self.feed_label = QLabel()
+        self.feed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.feed_label.setStyleSheet("background-color: #1a1a1a; border-radius: 8px;")
+        self.feed_label.setMinimumSize(640, 480)
+        
+        vb.addWidget(self.feed_label, 1)
+    def update_frame(self, qimg):
+        if not self.isVisible() or self._is_updating:
+            return
+            
+        self._is_updating = True
+        try:
+            pixmap = QPixmap.fromImage(qimg).scaled(
+                self.feed_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.feed_label.setPixmap(pixmap)
+        finally:
+            self._is_updating = False
+
+
 class SettingsPage(QWidget):
     settings_changed = pyqtSignal()
 
@@ -455,7 +492,7 @@ class ControlPanel(QMainWindow):
 
         nav_items = [
             ("Dashboard", 0), ("AI Models", 1), ("Voice", 2),
-            ("Visual", 3), ("Functions", 4), ("Settings", 5),
+            ("Visual", 3), ("Functions", 4), ("Settings", 5), ("Camera Feed", 6)
         ]
         self._nav_buttons = []
         for label, idx in nav_items:
@@ -487,9 +524,10 @@ class ControlPanel(QMainWindow):
         self._visual_page   = VisualSettingsPage(self.settings)
         self._functions     = FunctionsPage(self.settings, self.registry)
         self._settings_page = SettingsPage(self.settings)
+        self._camera_page   = CameraViewPage(self.settings)
 
         for page in [self._dashboard, self._models, self._voice_page,
-                     self._visual_page, self._functions, self._settings_page]:
+                     self._visual_page, self._functions, self._settings_page, self._camera_page]:
             self._stack.addWidget(page)
 
         cw_vb.addWidget(self._stack)
@@ -535,10 +573,6 @@ class ControlPanel(QMainWindow):
                 lambda on: self.visual.start_eye_tracking(self.settings.get("visual_camera", 0)) if on
                 else self.visual.stop_eye_tracking()
             )
-            self._visual_page.toggle_sign_language.connect(
-                lambda on: self.visual.start_sign_language(self.settings.get("visual_camera", 0)) if on
-                else self.visual.stop_sign_language()
-            )
             self._visual_page.start_calibration.connect(self.visual.start_calibration)
             self._visual_page.advance_calibration.connect(self.visual.advance_calibration)
             self.visual.calibration_progress.connect(
@@ -553,6 +587,7 @@ class ControlPanel(QMainWindow):
                 lambda m: self._visual_page.set_calibration_status(f"Error: {m}")
             )
             self._visual_page.settings_changed.connect(self._on_settings_changed)
+            self.visual.frame_processed.connect(self._camera_page.update_frame)
 
         self._switch_page(0)
 
