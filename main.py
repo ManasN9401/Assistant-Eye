@@ -1,24 +1,42 @@
 """
 EYE — AI Website Assistant (Phase 4 — complete)
 """
+# print("start of file")
 import logging
+# print("after import logging")
 import sys
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtGui import QIcon, QColor, QPixmap, QPainter, QBrush
-from PyQt6.QtCore import Qt
+# print("after import sys")
 
 from core.settings import Settings
+# print("after import core.settings")
 from core.ai_engine import AIEngine
+# print("after import core.ai_engine")
 from core.function_registry import FunctionRegistry
+# print("after import core.function_registry")
 from core.hotkeys import HotkeyManager
+# print("after import core.hotkeys")
 from ui.control_panel import ControlPanel
+# print("after import ui.control_panel")
 from ui.overlay import Overlay
+# print("after import ui.overlay")
 from ui.calibration_overlay import CalibrationOverlay
+# print("after import ui.calibration_overlay")  
 from ui.styles import DARK_QSS
+# print("after import ui.styles")
 from voice.coordinator import VoiceCoordinator
+# print("after import voice.coordinator")
 from bridge.ws_server import BrowserBridgeThread
+# print("after import bridge.ws_server")
 from bridge.playwright_bridge import PlaywrightBridge, ActionExecutor
 from visual.coordinator import VisualCoordinator
+# print("before import PyQt6.QtWidgets")
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+# print("after import PyQt6.QtWidgets")
+from PyQt6.QtGui import QIcon, QColor, QPixmap, QPainter, QBrush
+# print("after import PyQt6.QtGui")
+from PyQt6.QtCore import Qt
+# print("after import PyQt6.QtCore")
+
 
 
 def _tray_icon(color="#e8a020") -> QIcon:
@@ -48,12 +66,10 @@ def main():
     app.setStyleSheet(DARK_QSS)
     log.debug("Starting EYE assistant application")
 
-    # ── Core ──────────────────────────────────────────────────────────────────
     settings = Settings()
     engine   = AIEngine(settings)
     registry = FunctionRegistry(settings)
     
-    # Auto-load the builtin registry if available
     registries = registry.list_registries()
     if registries:
         registry.load(registries[0]["file"])
@@ -69,20 +85,15 @@ def main():
     executor   = ActionExecutor(settings, engine, playwright, browser_bridge)
     log.debug("Action executor created")
 
-    # ── Voice ─────────────────────────────────────────────────────────────────
     voice = VoiceCoordinator(settings, engine, registry)
     log.debug("Voice coordinator initialized")
 
-    # ── Visual ────────────────────────────────────────────────────────────────
     visual = VisualCoordinator(settings)
 
-    # ── UI ────────────────────────────────────────────────────────────────────
     overlay   = Overlay(settings, engine, registry)
     calib_win = CalibrationOverlay()
     panel     = ControlPanel(settings, registry, engine, voice,
                              browser_bridge, executor, visual)
-
-    # ── Hotkeys ───────────────────────────────────────────────────────────────
     hotkeys = HotkeyManager(settings)
     hotkeys.overlay_triggered.connect(overlay.toggle)
     hotkeys.listen_triggered.connect(voice.trigger_listen)
@@ -91,10 +102,11 @@ def main():
     # Re-register when settings change
     panel._settings_page.settings_changed.connect(hotkeys.update_hotkeys)
 
-    # ── Calibration overlay wiring ────────────────────────────────────────────
-    # Visual settings page "Start calibration" → show calibration overlay
+
+    # Visual settings page "Start calibration" -> show calibration overlay
     panel._visual_page.start_calibration.disconnect()   # disconnect old signal
     panel._visual_page.start_calibration.connect(calib_win.start)
+    panel._visual_page.start_hand_calibration.connect(visual.start_hand_calibration)
     panel._visual_page.advance_calibration.disconnect()
     panel._visual_page.advance_calibration.connect(calib_win._advance)
 

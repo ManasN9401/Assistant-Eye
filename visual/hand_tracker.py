@@ -117,10 +117,10 @@ def classify_gesture(hand_landmarks) -> Gesture:
 
     # ── Pinch (thumb ↔ index distance) ───────────────────────
     pinch_dist = _dist(lm[4], lm[8])
-    is_pinching = pinch_dist < 0.06
+    is_pinching = pinch_dist < 0.05  # Tighter threshold: more deliberate pinch needed
 
     # ── Finger extension flags ────────────────────────────────
-    thumb_up   = lm[4].y < lm[3].y
+    thumb_up   = lm[4].y < lm[2].y  # tip above MCP joint (more reliable than PIP)
     index_ext  = _finger_extended(lm, 8, 6)
     mid_ext    = _finger_extended(lm, 12, 10)
     ring_ext   = _finger_extended(lm, 16, 14)
@@ -134,8 +134,14 @@ def classify_gesture(hand_landmarks) -> Gesture:
     if index_ext and mid_ext and ring_ext and pinky_ext and thumb_up:
         return Gesture.OPEN_PALM
 
-    # ── Fist ──────────────────────────────────────────────────
-    if not index_ext and not mid_ext and not ring_ext and not pinky_ext and not thumb_up:
+    # ── Fist (all fingers curled, including thumb check via x-axis) ──
+    # Use both y-axis and knuckle-tip distance for more robust detection
+    index_curled = lm[8].y > lm[5].y   # tip below MCP
+    mid_curled   = lm[12].y > lm[9].y
+    ring_curled  = lm[16].y > lm[13].y
+    pinky_curled = lm[20].y > lm[17].y
+    thumb_curled = _dist(lm[4], lm[9]) < 0.2  # thumb tip near middle knuckle
+    if index_curled and mid_curled and ring_curled and pinky_curled and thumb_curled:
         return Gesture.FIST
 
     # ── Thumbs up ─────────────────────────────────────────────
@@ -171,12 +177,13 @@ class PinchScrollTracker:
         self._last_y = y
         self._pinch_start_time = time.time()
 
-    def update(self, y: float) -> float:
+    def update(self, y: float, sensitivity: float = None) -> float:
         """Returns scroll delta in pixels (negative = scroll up)."""
         if self._last_y is None:
             self._last_y = y
             return 0.0
-        delta = (y - self._last_y) * self._sensitivity
+        sens = sensitivity if sensitivity is not None else self._sensitivity
+        delta = (y - self._last_y) * sens
         self._last_y = y
         return delta
 
@@ -223,6 +230,16 @@ class HandTrackingWorker(QThread):
         self._ema_x: Optional[float] = None
         self._ema_y: Optional[float] = None
         self._ema_alpha = 0.35
+        self._calib_state = 0  # 0=idle, 1=top-left, 2=bottom-right
+        self._calib_tl = (0.0, 0.0)
+        self._last_preview_time = 0.0
+        # Hold-to-trigger: tracks when the current discrete gesture started
+        self._hold_gesture: Gesture = Gesture.NONE
+        self._hold_start: float = 0.0
+        self._hold_fired: bool = False  # ensures we only fire once per hold
+
+    def trigger_calibration(self):
+        self._calib_state = 1
 
     def run(self):
         try:
@@ -284,6 +301,7 @@ class HandTrackingWorker(QThread):
                 last_proc_time = now
 
                 frame_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+                h, w, ch = frame_rgb.shape
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
                 results = landmarker.detect(image)
 
@@ -295,7 +313,6 @@ class HandTrackingWorker(QThread):
                     
                     self._gesture_buffer.clear()
                     self._last_discrete_gesture = Gesture.NONE
-                    h, w, ch = frame_rgb.shape
                     qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                     self.frame_processed.emit(qimg)
                     continue
@@ -305,10 +322,20 @@ class HandTrackingWorker(QThread):
                 
                 # We now pass the entire list of hands to support 2-hand gestures
                 gesture = classify_gesture(results.hand_landmarks)
+
+                # Active zone boundaries for mapping/viz
+                zx = self.settings.get("hand_point_x", 0.1)
+                zy = self.settings.get("hand_point_y", 0.1)
+                zw = self.settings.get("hand_point_w", 0.8)
+                zh = self.settings.get("hand_point_h", 0.8)
                 
                 ix = hand[8].x  # index tip x
                 iy = hand[8].y  # index tip y
-                
+
+                # Map to active zone (used for all cursor/gesture emission)
+                nx = max(0.0, min(1.0, (ix - zx) / max(0.001, zw)))
+                ny = max(0.0, min(1.0, (iy - zy) / max(0.001, zh)))
+
                 cx, cy = int(ix * w), int(iy * h)
 
                 # Draw landmarks for ALL detected hands over the camera feed output
@@ -319,23 +346,62 @@ class HandTrackingWorker(QThread):
                 
                 cv2.putText(frame_rgb, f"Gesture: {gesture.value}", (15, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+
+                # ── Draw Configured Active Display Zone Rectangle ──────────────
+                rect_x1, rect_y1 = int(zx * w), int(zy * h)
+                rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
                 
-                qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
-                self.frame_processed.emit(qimg)
+                # Draw calibration prompts if active
+                if self._calib_state == 1:
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT of your desired zone", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                elif self._calib_state == 2:
+                    cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(ix*w), int(iy*h)), (0, 165, 255), 2)
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT of your desired zone", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                else:
+                    cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
+                
+                # Throttle preview emission to ~10 FPS to prevent OOM
+                if now - self._last_preview_time > 0.1:
+                    qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                    if not qimg.isNull():
+                        self.frame_processed.emit(qimg)
+                    self._last_preview_time = now
 
-                # Index tip normalised position (cursor anchor)
-                ix = hand[8].x
-                iy = hand[8].y
+                # ── Calibration Interception ──────────────────────────
+                if self._calib_state > 0 and gesture == Gesture.PINCH_START:
+                    if self._calib_state == 1:
+                        self._calib_tl = (ix, iy)
+                        self._calib_state = 2
+                        time.sleep(0.5) # debounce
+                    elif self._calib_state == 2:
+                        tl_x, tl_y = self._calib_tl
+                        # Ensure bottom right is actually below & right of top-left
+                        bx, by = max(tl_x, ix), max(tl_y, iy)
+                        tx, ty = min(tl_x, ix), min(tl_y, iy)
+                        self.settings.update({
+                            "hand_point_x": tx,
+                            "hand_point_y": ty,
+                            "hand_point_w": max(0.1, bx - tx),
+                            "hand_point_h": max(0.1, by - ty)
+                        })
+                        self._calib_state = 0
+                        time.sleep(0.5)
+                    continue
 
-                # ── Pinch / scroll ────────────────────────────
+                # ── Scroll / Click matching ──────────────────────────────
                 if gesture == Gesture.PINCH_START:
                     pinch_y = (hand[4].y + hand[8].y) / 2
                     if not self._was_pinching:
                         self._scroll_tracker.begin(pinch_y)
                         self._was_pinching = True
                     else:
-                        delta = self._scroll_tracker.update(pinch_y)
-                        if abs(delta) > 2:
+                        # Sensitivity: units are wheel-delta per normalised unit of movement.
+                        # Windows WHEEL_DELTA = 120 per notch. Default 15 ≈ 1 notch per ~8% camera movement.
+                        live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 15))
+                        delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
+                        if abs(delta) > 1:
                             self.scroll.emit(delta)
                     continue
 
@@ -344,35 +410,40 @@ class HandTrackingWorker(QThread):
                         self.click.emit(ix, iy)
                     self._was_pinching = False
 
-                # ── Point cursor move (with EMA smoothing) ────────────
+                # ── Point cursor move (with EMA smoothing on mapped coords) ──
                 if gesture == Gesture.POINT:
                     if self._ema_x is None:
-                        self._ema_x = ix
-                        self._ema_y = iy
+                        self._ema_x = nx
+                        self._ema_y = ny
                     else:
-                        self._ema_x = (self._ema_alpha * ix) + ((1 - self._ema_alpha) * self._ema_x)
-                        self._ema_y = (self._ema_alpha * iy) + ((1 - self._ema_alpha) * self._ema_y)
+                        self._ema_x = (self._ema_alpha * nx) + ((1 - self._ema_alpha) * self._ema_x)
+                        self._ema_y = (self._ema_alpha * ny) + ((1 - self._ema_alpha) * self._ema_y)
                     self.cursor_move.emit(self._ema_x, self._ema_y)
                     continue
                 else:
                     self._ema_x = None  # Reset EMA if gesture changes
                     self._ema_y = None
 
-                # ── Discrete gestures (with temporal smoothing buffer) ──────────
+                # ── Discrete gestures (hold-to-trigger) ────────────────────────
                 if gesture not in (Gesture.NONE, Gesture.POINT, Gesture.PINCH_START):
-                    self._gesture_buffer.append(gesture)
-                    if len(self._gesture_buffer) > self._buffer_size_requirement:
-                        self._gesture_buffer.pop(0)
-                        
-                    # Only trigger if the buffer is full and entirely homogeneous 
-                    if len(self._gesture_buffer) == self._buffer_size_requirement and all(g == gesture for g in self._gesture_buffer):
-                        if gesture != self._last_discrete_gesture:
-                            self._last_discrete_gesture = gesture
-                            logger.debug(f"[HandTracker] Detected gesture: {gesture.value}")
-                            self.gesture_detected.emit(gesture.value, ix, iy)
+                    hold_duration = float(self.settings.get("gesture_hold_seconds", 2.0))
+
+                    if gesture != self._hold_gesture:
+                        # Gesture changed — reset hold timer
+                        self._hold_gesture = gesture
+                        self._hold_start   = now
+                        self._hold_fired   = False
+                    elif not self._hold_fired:
+                        elapsed = now - self._hold_start
+                        if elapsed >= hold_duration:
+                            logger.debug(f"[HandTracker] Hold-triggered gesture: {gesture.value} ({elapsed:.2f}s)")
+                            self.gesture_detected.emit(gesture.value, nx, ny)
+                            self._hold_fired = True  # don't re-fire until gesture changes
                 else:
-                    self._gesture_buffer.clear()
-                    self._last_discrete_gesture = gesture
+                    # Not a discrete gesture — reset hold state
+                    if gesture != self._hold_gesture:
+                        self._hold_gesture = gesture
+                        self._hold_fired   = False
 
         finally:
             cap.release()
@@ -424,6 +495,10 @@ class HandTracker(QObject):
         self._worker.error.connect(self.error)
         self._worker.frame_processed.connect(self.frame_processed)
         self._worker.start()
+
+    def start_calibration(self):
+        if self._worker:
+            self._worker.trigger_calibration()
 
     def stop(self):
         if self._worker:

@@ -36,14 +36,30 @@ class CursorController:
         self._screen_w, self._screen_h = self._get_screen_size()
 
     def _get_screen_size(self) -> tuple[int, int]:
+        # On Windows use ctypes — most reliable, works before QApplication settles
+        if self._system == "Windows":
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.SetProcessDPIAware()  # Ensure we get physical pixels, not scaled
+                w = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+                h = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+                if w > 0 and h > 0:
+                    logger.debug(f"Screen size from ctypes: {w}x{h}")
+                    return w, h
+            except Exception as e:
+                logger.warning(f"ctypes screen size failed: {e}")
+        # Fallback: PyQt (works on Linux/macOS)
         try:
             from PyQt6.QtWidgets import QApplication
             screen = QApplication.primaryScreen()
             if screen:
                 geo = screen.geometry()
+                logger.debug(f"Screen size from PyQt: {geo.width()}x{geo.height()}")
                 return geo.width(), geo.height()
         except Exception:
             pass
+        logger.warning("Using fallback screen size 1920x1080")
         return 1920, 1080
 
     def move_to(self, x_norm: float, y_norm: float):
@@ -57,15 +73,18 @@ class CursorController:
         self._click()
 
     def scroll(self, dy: float):
-        """Scroll by dy pixels."""
+        """Scroll by dy wheel units (positive = down, negative = up).
+        Windows WHEEL_DELTA = 120 per notch; we accept fractional values.
+        """
         try:
             if self._system == "Windows":
                 import ctypes
-                # positive dy = scroll down, negative = scroll up
-                ctypes.windll.user32.mouse_event(0x0800, 0, 0, int(-dy / 40), 0)
+                amount = int(-dy)  # negate: positive dy = scroll down = negative wheel
+                if amount != 0:
+                    ctypes.windll.user32.mouse_event(0x0800, 0, 0, amount, 0)
             else:
                 import pyautogui
-                pyautogui.scroll(-int(dy / 40))
+                pyautogui.scroll(-int(dy / 120))  # pyautogui uses notch counts
         except Exception:
             pass
 
@@ -216,6 +235,10 @@ class VisualCoordinator(QObject):
     def start_calibration(self):
         self.eye_tracker.start_calibration()
         self.status.emit("Calibration started — look at each dot and press advance")
+
+    def start_hand_calibration(self):
+        self.hand_tracker.start_calibration()
+        self.status.emit("Hand Tracking Calibration Active: Pinch top left then bottom right of your ideal target area.")
 
     def advance_calibration(self):
         self.eye_tracker.advance_calibration()
