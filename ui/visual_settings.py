@@ -100,8 +100,8 @@ class VisualSettingsPage(QWidget):
         vb.addWidget(_label("Scroll sensitivity", "label-field"))
         sens_row = QHBoxLayout()
         self._scroll_sens = NoScrollSlider(Qt.Orientation.Horizontal)
-        self._scroll_sens.setRange(5, 120)  # wheel-delta units: ~5 (slow) to 120 (1 notch per tiny move)
-        self._scroll_sens.setValue(int(self.settings.get("hand_scroll_sensitivity", 15)))
+        self._scroll_sens.setRange(500, 8000)  # wheel-delta units per normalised unit of movement
+        self._scroll_sens.setValue(int(self.settings.get("hand_scroll_sensitivity", 2500)))
         self._sens_lbl = QLabel(str(self._scroll_sens.value()))
         self._sens_lbl.setObjectName("label-mono")
         self._sens_lbl.setFixedWidth(40)

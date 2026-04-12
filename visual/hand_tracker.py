@@ -201,6 +201,64 @@ class PinchScrollTracker:
         self._pinch_start_time = None
 
 
+# ── One Euro Filter ───────────────────────────────────────────────────────────
+
+class _LowPassFilter:
+    """Single-pole low-pass filter used by OneEuroFilter."""
+    def __init__(self):
+        self._value: Optional[float] = None
+
+    def filter(self, x: float, alpha: float) -> float:
+        if self._value is None:
+            self._value = x
+        else:
+            self._value = alpha * x + (1.0 - alpha) * self._value
+        return self._value
+
+    def last(self) -> Optional[float]:
+        return self._value
+
+    def reset(self):
+        self._value = None
+
+
+class OneEuroFilter:
+    """
+    One Euro Filter — adaptive smoothing filter for noisy pointer input.
+
+    At low speeds: heavy smoothing (reduces jitter when hand is still).
+    At high speeds: minimal smoothing (keeps up with fast hand movements).
+
+    Parameters:
+        min_cutoff: Smoothing strength at rest. Lower = smoother but laggier. (default 1.0 Hz)
+        beta:       Speed coefficient. Higher = less lag during fast movement. (default 0.007)
+        d_cutoff:   Derivative smoothing frequency (default 1.0 Hz, rarely needs tuning).
+    """
+    def __init__(self, min_cutoff: float = 1.0, beta: float = 0.007, d_cutoff: float = 1.0):
+        self._min_cutoff = min_cutoff
+        self._beta = beta
+        self._d_cutoff = d_cutoff
+        self._x_filter = _LowPassFilter()
+        self._dx_filter = _LowPassFilter()
+
+    def _alpha(self, cutoff: float, dt: float) -> float:
+        tau = 1.0 / (2.0 * 3.14159265 * cutoff)
+        return 1.0 / (1.0 + tau / max(dt, 1e-6))
+
+    def filter(self, x: float, dt: float) -> float:
+        """Apply filter to value x with time delta dt (seconds)."""
+        d_alpha = self._alpha(self._d_cutoff, dt)
+        prev = self._x_filter.last()
+        dx = (x - prev) / max(dt, 1e-6) if prev is not None else 0.0
+        edx = self._dx_filter.filter(dx, d_alpha)
+        cutoff = self._min_cutoff + self._beta * abs(edx)
+        return self._x_filter.filter(x, self._alpha(cutoff, dt))
+
+    def reset(self):
+        self._x_filter.reset()
+        self._dx_filter.reset()
+
+
 # ── Worker thread ─────────────────────────────────────────────────────────────
 
 class HandTrackingWorker(QThread):
@@ -227,9 +285,12 @@ class HandTrackingWorker(QThread):
         self._last_discrete_gesture = Gesture.NONE
         self._gesture_buffer = []  # For temporal smoothing
         self._buffer_size_requirement = 5
-        self._ema_x: Optional[float] = None
-        self._ema_y: Optional[float] = None
-        self._ema_alpha = 0.35
+        # One Euro Filter for pointer smoothing
+        # min_cutoff=30: near-instant response at all speeds (high = less filtering)
+        # beta=1.0: fully adapts to velocity — no lag during movement
+        self._oef_x = OneEuroFilter(min_cutoff=30.0, beta=1.0)
+        self._oef_y = OneEuroFilter(min_cutoff=30.0, beta=1.0)
+        self._oef_active = False
         self._calib_state = 0  # 0=idle, 1=top-left, 2=bottom-right
         self._calib_tl = (0.0, 0.0)
         self._last_preview_time = 0.0
@@ -397,9 +458,7 @@ class HandTrackingWorker(QThread):
                         self._scroll_tracker.begin(pinch_y)
                         self._was_pinching = True
                     else:
-                        # Sensitivity: units are wheel-delta per normalised unit of movement.
-                        # Windows WHEEL_DELTA = 120 per notch. Default 15 ≈ 1 notch per ~8% camera movement.
-                        live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 15))
+                        live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 2500))
                         delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
                         if abs(delta) > 1:
                             self.scroll.emit(delta)
@@ -410,19 +469,20 @@ class HandTrackingWorker(QThread):
                         self.click.emit(ix, iy)
                     self._was_pinching = False
 
-                # ── Point cursor move (with EMA smoothing on mapped coords) ──
+                # ── Point cursor move (One Euro Filter smoothing) ──────────
                 if gesture == Gesture.POINT:
-                    if self._ema_x is None:
-                        self._ema_x = nx
-                        self._ema_y = ny
-                    else:
-                        self._ema_x = (self._ema_alpha * nx) + ((1 - self._ema_alpha) * self._ema_x)
-                        self._ema_y = (self._ema_alpha * ny) + ((1 - self._ema_alpha) * self._ema_y)
-                    self.cursor_move.emit(self._ema_x, self._ema_y)
+                    dt = max(now - last_proc_time, 0.001)  # time since last processed frame
+                    if not self._oef_active:
+                        # Reset filters on re-entry to avoid snap from stale state
+                        self._oef_x.reset()
+                        self._oef_y.reset()
+                        self._oef_active = True
+                    sx = self._oef_x.filter(nx, dt)
+                    sy = self._oef_y.filter(ny, dt)
+                    self.cursor_move.emit(sx, sy)
                     continue
                 else:
-                    self._ema_x = None  # Reset EMA if gesture changes
-                    self._ema_y = None
+                    self._oef_active = False  # Reset on gesture change
 
                 # ── Discrete gestures (hold-to-trigger) ────────────────────────
                 if gesture not in (Gesture.NONE, Gesture.POINT, Gesture.PINCH_START):
