@@ -384,7 +384,7 @@ class CameraViewPage(QWidget):
             pixmap = QPixmap.fromImage(qimg).scaled(
                 self.feed_label.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+                Qt.TransformationMode.FastTransformation
             )
             self.feed_label.setPixmap(pixmap)
         finally:

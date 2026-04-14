@@ -301,7 +301,9 @@ class HandTrackingWorker(QThread):
         self._hold_gesture: Gesture = Gesture.NONE
         self._hold_start: float = 0.0
         self._hold_fired: bool = False  # ensures we only fire once per hold
-        self._pose_matcher = PoseMatcher(threshold=0.25)
+        self._pose_matcher = PoseMatcher()
+        self._last_raw_pose = None
+        self._pose_confirm_count = 0 
         self._capture_name: Optional[str] = None
         self._capture_buffer: List[List[Dict[str, float]]] = []
 
@@ -377,6 +379,7 @@ class HandTrackingWorker(QThread):
                 now = time.time()
                 # Frame skip to prevent lag (limit to ~20FPS)
                 if now - last_proc_time < 0.05:
+                    time.sleep(0.01) # Give the CPU a break
                     continue
                 last_proc_time = now
 
@@ -393,6 +396,9 @@ class HandTrackingWorker(QThread):
                     
                     self._gesture_buffer.clear()
                     self._last_discrete_gesture = Gesture.NONE
+                    self._last_raw_pose = None # Reset hysteresis
+                    self._pose_confirm_count = 0
+                    
                     qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                     self.frame_processed.emit(qimg)
                     continue
@@ -400,8 +406,15 @@ class HandTrackingWorker(QThread):
                 # Parse first hand for 2D coords (for scrolling/pointing)
                 hand = results.hand_landmarks[0]
                 
-                # 1. Custom Pose Matching (Check this library first)
-                pose_match = self._pose_matcher.match(hand)
+                # 1. Custom Pose Matching with Hysteresis (Confirm over 3 frames)
+                raw_pose = self._pose_matcher.match(hand)
+                if raw_pose == self._last_raw_pose and raw_pose is not None:
+                    self._pose_confirm_count += 1
+                else:
+                    self._last_raw_pose = raw_pose
+                    self._pose_confirm_count = 0
+                
+                pose_match = raw_pose if self._pose_confirm_count >= 3 else None
 
                 # 2. Built-in Geometric Classification
                 gesture = classify_gesture(results.hand_landmarks)
