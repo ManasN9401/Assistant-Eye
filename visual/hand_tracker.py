@@ -19,15 +19,17 @@ All landmark processing runs in a QThread. The main thread only receives
 high-level gesture events via Qt signals.
 """
 from __future__ import annotations
+import os
 import time
 import logging
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, List, Dict
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
+from visual.pose_matcher import PoseMatcher
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
@@ -272,6 +274,7 @@ class HandTrackingWorker(QThread):
     click            = pyqtSignal(float, float)
     error            = pyqtSignal(str)
     frame_processed  = pyqtSignal(object)  # Emits QImage
+    custom_pose_detected = pyqtSignal(str) # Emits pose name
 
     def __init__(self, settings, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -298,9 +301,20 @@ class HandTrackingWorker(QThread):
         self._hold_gesture: Gesture = Gesture.NONE
         self._hold_start: float = 0.0
         self._hold_fired: bool = False  # ensures we only fire once per hold
+        self._pose_matcher = PoseMatcher(threshold=0.25)
+        self._capture_name: Optional[str] = None
+        self._capture_buffer: List[List[Dict[str, float]]] = []
 
     def trigger_calibration(self):
         self._calib_state = 1
+
+    def learn_pose(self, name: str, action: str = "none", params: dict = None):
+        """Triggers recording of the current hand shape."""
+        self._capture_name = name
+        self._capture_action = action
+        self._capture_params = params
+        self._capture_buffer = []
+        logger.info(f"Started learning pose: {name} (Action: {action})")
 
     def run(self):
         try:
@@ -349,6 +363,11 @@ class HandTrackingWorker(QThread):
             )
             landmarker = HandLandmarker.create_from_options(options)
 
+            # Load custom poses
+            custom_poses_path = "core/custom_poses.json"
+            if os.path.exists(custom_poses_path):
+                self._pose_matcher.load_templates(custom_poses_path)
+
             last_proc_time = 0.0
             while self._running:
                 ok, frame = cap.read()
@@ -381,8 +400,19 @@ class HandTrackingWorker(QThread):
                 # Parse first hand for 2D coords (for scrolling/pointing)
                 hand = results.hand_landmarks[0]
                 
-                # We now pass the entire list of hands to support 2-hand gestures
+                # 1. Custom Pose Matching (Check this library first)
+                pose_match = self._pose_matcher.match(hand)
+
+                # 2. Built-in Geometric Classification
                 gesture = classify_gesture(results.hand_landmarks)
+
+                # 3. Priority Resolution:
+                # Basic interaction mechanics (PINCH, POINT) always override custom poses 
+                # to maintain system stability. Otherwise, Custom Poses take priority 
+                # over generic shapes like VICTORY or CALL_ME.
+                if gesture not in [Gesture.PINCH_START, Gesture.POINT]:
+                    if pose_match:
+                        gesture = pose_match
 
                 # Active zone boundaries for mapping/viz
                 zx = self.settings.get("hand_point_x", 0.1)
@@ -405,8 +435,18 @@ class HandTrackingWorker(QThread):
                         jx, jy = int(lm.x * w), int(lm.y * h)
                         cv2.circle(frame_rgb, (jx, jy), 4, (200, 100, 255), -1)
                 
-                cv2.putText(frame_rgb, f"Gesture: {gesture.value}", (15, 40),
+                # ── On-Screen Display (OSD) ───────────────────────────
+                # Display current gesture (built-in or custom string)
+                g_display = gesture if isinstance(gesture, str) else gesture.value
+                cv2.putText(frame_rgb, f"Gesture: {g_display}", (15, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+
+                # Show recording indicator if capturing a new pose
+                if self._capture_name:
+                    cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+                    cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
 
                 # ── Draw Configured Active Display Zone Rectangle ──────────────
                 rect_x1, rect_y1 = int(zx * w), int(zy * h)
@@ -484,6 +524,25 @@ class HandTrackingWorker(QThread):
                 else:
                     self._oef_active = False  # Reset on gesture change
 
+                # ── Custom Pose Matching ────────────────────────────
+                # Handle pose learning first
+                if self._capture_name and results.hand_landmarks:
+                    self._capture_buffer.append(results.hand_landmarks[0])
+                    if len(self._capture_buffer) >= 20: # Capture ~1 second
+                        self._pose_matcher.add_template(
+                            self._capture_name, 
+                            self._capture_buffer[0], 
+                            self._capture_action, 
+                            self._capture_params
+                        )
+                        self._pose_matcher.save_templates("core/custom_poses.json")
+                        logger.info(f"Learned and saved pose: {self._capture_name}")
+                        self._capture_name = None
+                        self._capture_action = "none"
+                        self._capture_params = None
+                        self._capture_buffer = []
+
+
                 # ── Discrete gestures (hold-to-trigger) ────────────────────────
                 if gesture not in (Gesture.NONE, Gesture.POINT, Gesture.PINCH_START):
                     hold_duration = float(self.settings.get("gesture_hold_seconds", 2.0))
@@ -496,8 +555,9 @@ class HandTrackingWorker(QThread):
                     elif not self._hold_fired:
                         elapsed = now - self._hold_start
                         if elapsed >= hold_duration:
-                            logger.debug(f"[HandTracker] Hold-triggered gesture: {gesture.value} ({elapsed:.2f}s)")
-                            self.gesture_detected.emit(gesture.value, nx, ny)
+                            gname = gesture if isinstance(gesture, str) else gesture.value
+                            logger.debug(f"[HandTracker] Hold-triggered gesture: {gname} ({elapsed:.2f}s)")
+                            self.gesture_detected.emit(gname, nx, ny)
                             self._hold_fired = True  # don't re-fire until gesture changes
                 else:
                     # Not a discrete gesture — reset hold state
@@ -534,6 +594,7 @@ class HandTracker(QObject):
     action_confirm       = pyqtSignal()
     action_cancel        = pyqtSignal()
     action_stop_speaking = pyqtSignal()
+    custom_gesture       = pyqtSignal(str, str, dict) # name, action, params
     frame_processed      = pyqtSignal(object)
 
     def __init__(self, settings, parent=None):
@@ -560,6 +621,10 @@ class HandTracker(QObject):
         if self._worker:
             self._worker.trigger_calibration()
 
+    def learn_pose(self, name: str, action: str = "none", params: dict = None):
+        if self._worker:
+            self._worker.learn_pose(name, action, params)
+
     def stop(self):
         if self._worker:
             self._worker.stop()
@@ -581,15 +646,25 @@ class HandTracker(QObject):
     def _on_gesture(self, gesture_str: str, x: float, y: float):
         self.gesture.emit(gesture_str, x, y)
 
-        # Map gestures to high-level actions
+        # Map built-in gestures to high-level system signals
         mapping = {
             Gesture.CLAP.value:      self.action_open_overlay,
-            Gesture.BOTH_PALMS.value: self.action_open_overlay, # optional alias
+            Gesture.BOTH_PALMS.value: self.action_open_overlay,
             Gesture.FIST.value:      self.action_close_overlay,
             Gesture.THUMBS_UP.value: self.action_confirm,
             Gesture.CALL_ME.value:   self.action_cancel,
             Gesture.OPEN_PALM.value: self.action_stop_speaking,
         }
+        
         signal = mapping.get(gesture_str)
         if signal:
             signal.emit()
+            return
+
+        # If it's not a built-in signal, check the custom pose library
+        if self._worker and self._worker.isRunning():
+            pose_data = self._worker._pose_matcher.get_action_for_pose(gesture_str)
+            if pose_data:
+                action = pose_data.get("action", "none")
+                params = pose_data.get("params", {})
+                self.custom_gesture.emit(gesture_str, action, params)

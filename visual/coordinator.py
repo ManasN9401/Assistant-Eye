@@ -23,6 +23,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from visual.hand_tracker import HandTracker
 from visual.eye_tracker import EyeTracker
 from visual.logging_config import setup_logging
+from core.function_registry import FunctionRegistry
 
 # Initialize logging on module import
 logger = logging.getLogger(__name__)
@@ -130,6 +131,9 @@ class VisualCoordinator(QObject):
     action_confirm       = pyqtSignal()
     action_cancel        = pyqtSignal()
     action_stop_speaking = pyqtSignal()
+    
+    # Custom Pose Actions
+    execute_custom_action = pyqtSignal(str, dict) # action_name, params
     frame_processed      = pyqtSignal(object) # QImage feed from cameras
 
     # Status
@@ -183,6 +187,7 @@ class VisualCoordinator(QObject):
 
         self.hand_tracker.error.connect(self.error)
         self.hand_tracker.frame_processed.connect(self.frame_processed)
+        self.hand_tracker.custom_gesture.connect(self._on_custom_gesture)
 
         # Eye gaze → cursor (throttled)
         self.eye_tracker.gaze_point.connect(self._on_gaze)
@@ -213,6 +218,11 @@ class VisualCoordinator(QObject):
             self._cursor.move_to(x, y)
             self._last_cursor_move = now
 
+    def _on_custom_gesture(self, name: str, action: str, params: dict):
+        logger.info(f"[Coordinator] Custom pose recognized: {name} -> {action}")
+        self.status.emit(f"Pose detected: {name}")
+        self.execute_custom_action.emit(action, params)
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start_hand_tracking(self, camera: int = 0):
@@ -242,6 +252,17 @@ class VisualCoordinator(QObject):
 
     def advance_calibration(self):
         self.eye_tracker.advance_calibration()
+
+    def learn_pose(self, name: str, action: str = "none", params: dict = None):
+        self.hand_tracker.learn_pose(name, action, params)
+        self.status.emit(f"Learning pose: {name}. Hold still for 2 seconds...")
+
+    def delete_pose(self, name: str):
+        if self.hand_active:
+            if name in self.hand_tracker._worker._pose_matcher.templates:
+                del self.hand_tracker._worker._pose_matcher.templates[name]
+                self.hand_tracker._worker._pose_matcher.save_templates("core/custom_poses.json")
+                self.status.emit(f"Deleted pose: {name}")
 
     def stop_all(self):
         self.hand_tracker.stop()

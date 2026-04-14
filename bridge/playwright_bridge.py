@@ -100,6 +100,8 @@ class ActionExecutor:
             return await self._run_navigate(action)
         if action_type == "ai_reason":
             return await self._run_ai_reason(action, params)
+        if action_type == "native":
+            return self._run_native(action)
         return f"Unknown action type: {action_type}"
 
     async def _run_js(self, code: str) -> str:
@@ -164,6 +166,16 @@ class ActionExecutor:
             "Give a helpful, concise answer based on the page content."
         )
         return self.engine.chat(prompt)
+
+    def _run_native(self, cmd: str) -> str:
+        try:
+            import os
+            # On Windows, os.startfile opens URLs, Protocols (spotify:), or EXE paths
+            os.startfile(cmd)
+            return f"Launched native target: {cmd}"
+        except Exception as e:
+            log.exception("Native launch failed")
+            return f"Error launching native app: {e}"
 
 
 def parse_action_from_ai(text: str):

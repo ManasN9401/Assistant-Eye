@@ -13,11 +13,15 @@ from PyQt6.QtWidgets import (
     QSpacerItem, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
+import logging
 from core.settings import Settings, AI_PROVIDERS
 from core.ai_engine import AIEngine
 from core.function_registry import FunctionRegistry
+
+logger = logging.getLogger(__name__)
 from ui.voice_settings import VoiceSettingsPage
 from ui.visual_settings import VisualSettingsPage
+from ui.gesture_lab import GestureLabPage
 from PyQt6.QtGui import QPixmap
 
 
@@ -492,7 +496,7 @@ class ControlPanel(QMainWindow):
 
         nav_items = [
             ("Dashboard", 0), ("AI Models", 1), ("Voice", 2),
-            ("Visual", 3), ("Functions", 4), ("Settings", 5), ("Camera Feed", 6)
+            ("Visual", 3), ("Gesture Lab", 4), ("Functions", 5), ("Settings", 6), ("Camera Feed", 7)
         ]
         self._nav_buttons = []
         for label, idx in nav_items:
@@ -522,13 +526,19 @@ class ControlPanel(QMainWindow):
         self._models        = ModelsPage(self.settings)
         self._voice_page    = VoiceSettingsPage(self.settings)
         self._visual_page   = VisualSettingsPage(self.settings)
+        self._gesture_lab   = GestureLabPage(self.settings)
         self._functions     = FunctionsPage(self.settings, self.registry)
         self._settings_page = SettingsPage(self.settings)
         self._camera_page   = CameraViewPage(self.settings)
-
-        for page in [self._dashboard, self._models, self._voice_page,
-                     self._visual_page, self._functions, self._settings_page, self._camera_page]:
+        
+        pages = [
+            self._dashboard, self._models, self._voice_page,
+            self._visual_page, self._gesture_lab, self._functions, 
+            self._settings_page, self._camera_page
+        ]
+        for page in pages:
             self._stack.addWidget(page)
+
 
         cw_vb.addWidget(self._stack)
 
@@ -589,7 +599,27 @@ class ControlPanel(QMainWindow):
             self._visual_page.settings_changed.connect(self._on_settings_changed)
             self.visual.frame_processed.connect(self._camera_page.update_frame)
 
+            # Gesture Lab Integration
+            self._gesture_lab.learn_pose_requested.connect(self.visual.learn_pose)
+            self._gesture_lab.delete_pose_requested.connect(self.visual.delete_pose)
+            
+            # Execute actions from coordinator
+            self.visual.execute_custom_action.connect(self._on_custom_action)
+            self.visual.status.connect(self._sb_label.setText)
+
         self._switch_page(0)
+
+    def _on_custom_action(self, action: str, params: dict):
+        if not self.executor:
+            return
+        logger.info(f"[ControlPanel] Executing custom action: {action}")
+        # Build a temporary function definition for the executor
+        fn_def = {
+            "name": "custom_gesture_action",
+            "action_type": "native" if action == "launch_app" else "js",
+            "action": params.get("uri", "") if action == "launch_app" else ""
+        }
+        self.executor.execute_action(fn_def, params)
 
     def _switch_page(self, idx):
         self._stack.setCurrentIndex(idx)
