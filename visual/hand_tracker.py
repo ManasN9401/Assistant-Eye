@@ -168,16 +168,18 @@ def classify_gesture(hand_landmarks) -> Gesture:
 # ── Scroll calculator ─────────────────────────────────────────────────────────
 
 class PinchScrollTracker:
-    """Tracks pinch position over time to calculate scroll deltas."""
+    """Tracks pinch position over time to calculate scroll deltas and click events."""
 
     def __init__(self, sensitivity: float = 1800.0):
         self._sensitivity = sensitivity
         self._last_y: Optional[float] = None
         self._pinch_start_time: Optional[float] = None
+        self._total_moved_px: float = 0.0
 
     def begin(self, y: float):
         self._last_y = y
         self._pinch_start_time = time.time()
+        self._total_moved_px = 0.0
 
     def update(self, y: float, sensitivity: float = None) -> float:
         """Returns scroll delta in pixels (negative = scroll up)."""
@@ -187,20 +189,32 @@ class PinchScrollTracker:
         sens = sensitivity if sensitivity is not None else self._sensitivity
         delta = (y - self._last_y) * sens
         self._last_y = y
+        self._total_moved_px += abs(delta)
         return delta
 
     def end(self) -> bool:
-        """Returns True if this was a quick tap (< 250ms) → treat as click."""
+        """
+        Returns True if this was a quick tap (< 350ms) with minimal movement.
+        """
         if self._pinch_start_time:
             duration = time.time() - self._pinch_start_time
+            moved = self._total_moved_px
             self._last_y = None
             self._pinch_start_time = None
-            return duration < 0.25
+            self._total_moved_px = 0.0
+            
+            # Treat as click if short duration AND we didn't scroll much
+            return duration < 0.35 and moved < 30
         return False
 
     def reset(self):
         self._last_y = None
         self._pinch_start_time = None
+        self._total_moved_px = 0.0
+        
+    @property
+    def total_moved(self) -> float:
+        return self._total_moved_px
 
 
 # ── One Euro Filter ───────────────────────────────────────────────────────────
@@ -289,11 +303,13 @@ class HandTrackingWorker(QThread):
         self._gesture_buffer = []  # For temporal smoothing
         self._buffer_size_requirement = 5
         # One Euro Filter for pointer smoothing
-        # min_cutoff=30: near-instant response at all speeds (high = less filtering)
+        # min_cutoff: higher = less lag/more jitter. 50.0 is very responsive.
         # beta=1.0: fully adapts to velocity — no lag during movement
-        self._oef_x = OneEuroFilter(min_cutoff=30.0, beta=1.0)
-        self._oef_y = OneEuroFilter(min_cutoff=30.0, beta=1.0)
+        self._oef_x = OneEuroFilter(min_cutoff=50.0, beta=1.0)
+        self._oef_y = OneEuroFilter(min_cutoff=50.0, beta=1.0)
         self._oef_active = False
+        self._last_sx, self._last_sy = 0.5, 0.5
+        self._scroll_suppressed_until = 0.0
         self._calib_state = 0  # 0=idle, 1=top-left, 2=bottom-right
         self._calib_tl = (0.0, 0.0)
         self._last_preview_time = 0.0
@@ -304,6 +320,9 @@ class HandTrackingWorker(QThread):
         self._pose_matcher = PoseMatcher()
         self._last_raw_pose = None
         self._pose_confirm_count = 0 
+        self._last_gesture = Gesture.NONE
+        self._last_point_time = 0.0
+        self._transition_clicked = False
         self._capture_name: Optional[str] = None
         self._capture_buffer: List[List[Dict[str, float]]] = []
 
@@ -510,20 +529,46 @@ class HandTrackingWorker(QThread):
                     if not self._was_pinching:
                         self._scroll_tracker.begin(pinch_y)
                         self._was_pinching = True
+                        
+                        # Immediate click on transition from POINT (with 150ms buffer)
+                        if (now - self._last_point_time) < 0.15:
+                            logger.debug(f"[HandTracker] Point -> Pinch transition click (Anchored at {self._last_sx:.3f}, {self._last_sy:.3f})")
+                            # Use anchored smoothed coordinates to prevent the 'snap'
+                            self.click.emit(self._last_sx, self._last_sy)
+                            self._transition_clicked = True
+                            # Suppress scrolling for a short window to let the click register
+                            self._scroll_suppressed_until = now + 0.20
+                        else:
+                            self._transition_clicked = False
                     else:
+                        if now < self._scroll_suppressed_until:
+                            # Scrolling is currently blocked to protect the click window
+                            continue
+                            
                         live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 2500))
                         delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
-                        if abs(delta) > 1:
-                            self.scroll.emit(delta)
+                        
+                        # Apply Dead-Zone: Don't emit scroll until total movement > 15px
+                        if self._scroll_tracker.total_moved > 15:
+                            if abs(delta) > 0.5:
+                                self.scroll.emit(delta)
                     continue
 
                 if self._was_pinching:
-                    if self._scroll_tracker.end():
-                        self.click.emit(ix, iy)
+                    # If we already clicked on transition, don't double click on release
+                    if self._scroll_tracker.end() and not self._transition_clicked:
+                        # Use anchored coords even for the tap-release if it was recent
+                        if (now - self._last_point_time) < 0.35:
+                            self.click.emit(self._last_sx, self._last_sy)
+                        else:
+                            self.click.emit(ix, iy)
                     self._was_pinching = False
+                    self._transition_clicked = False
 
                 # ── Point cursor move (One Euro Filter smoothing) ──────────
                 if gesture == Gesture.POINT:
+                    self._last_point_time = now # Track last time we were pointing
+                    
                     dt = max(now - last_proc_time, 0.001)  # time since last processed frame
                     if not self._oef_active:
                         # Reset filters on re-entry to avoid snap from stale state
@@ -532,6 +577,10 @@ class HandTrackingWorker(QThread):
                         self._oef_active = True
                     sx = self._oef_x.filter(nx, dt)
                     sy = self._oef_y.filter(ny, dt)
+                    
+                    # Store smoothed coords for anchoring future clicks
+                    self._last_sx, self._last_sy = sx, sy
+                    
                     self.cursor_move.emit(sx, sy)
                     continue
                 else:
@@ -577,6 +626,8 @@ class HandTrackingWorker(QThread):
                     if gesture != self._hold_gesture:
                         self._hold_gesture = gesture
                         self._hold_fired   = False
+                
+                self._last_gesture = gesture
 
         finally:
             cap.release()
