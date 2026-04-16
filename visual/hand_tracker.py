@@ -26,10 +26,12 @@ from enum import Enum, auto
 from typing import Optional, List, Dict
 
 import numpy as np
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QImage
 
 from visual.pose_matcher import PoseMatcher
+from visual.gesture_manager import SystemGestureManager
+from visual.platform_win import disable_efficiency_mode, set_high_precision_timer
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
@@ -71,6 +73,7 @@ class Gesture(str, Enum):
     BOTH_PALMS   = "both_palms"
     VICTORY      = "victory"
     CALL_ME      = "call_me"
+    MIDDLE_PINCH = "middle_pinch"
 
 
 # ── Landmark utilities ────────────────────────────────────────────────────────
@@ -128,9 +131,19 @@ def classify_gesture(hand_landmarks) -> Gesture:
     ring_ext   = _finger_extended(lm, 16, 14)
     pinky_ext  = _finger_extended(lm, 20, 18)
 
-    # ── Pinch (index + thumb) ─────────────────────────────────
+    # ── Double Pinch Check ──
+    # Priority: Index Pinch (Scroll) > Middle Pinch (Drag/Selection)
+    # This prevents 'accidental selection' when you just want to scroll.
+    middle_pinch_dist = _dist(lm[4], lm[12])
+    is_middle_pinching = middle_pinch_dist < 0.05
+    
     if is_pinching and not mid_ext and not ring_ext:
         return Gesture.PINCH_START
+    
+    if is_middle_pinching and not ring_ext:
+        # User is pinching with thumb + middle. 
+        # If the index is also near, PINCH_START above would have caught it first.
+        return Gesture.MIDDLE_PINCH
 
     # ── Open palm ─────────────────────────────────────────────
     if index_ext and mid_ext and ring_ext and pinky_ext and thumb_up:
@@ -204,7 +217,7 @@ class PinchScrollTracker:
             self._total_moved_px = 0.0
             
             # Treat as click if short duration AND we didn't scroll much
-            return duration < 0.35 and moved < 30
+            return duration < 0.25 and moved < 60
         return False
 
     def reset(self):
@@ -289,6 +302,8 @@ class HandTrackingWorker(QThread):
     error            = pyqtSignal(str)
     frame_processed  = pyqtSignal(object)  # Emits QImage
     custom_pose_detected = pyqtSignal(str) # Emits pose name
+    # (x, y, is_pressed)
+    middle_pinch_move = pyqtSignal(float, float, bool)
 
     def __init__(self, settings, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -303,10 +318,10 @@ class HandTrackingWorker(QThread):
         self._gesture_buffer = []  # For temporal smoothing
         self._buffer_size_requirement = 5
         # One Euro Filter for pointer smoothing
-        # min_cutoff: higher = less lag/more jitter. 50.0 is very responsive.
-        # beta=1.0: fully adapts to velocity — no lag during movement
-        self._oef_x = OneEuroFilter(min_cutoff=50.0, beta=1.0)
-        self._oef_y = OneEuroFilter(min_cutoff=50.0, beta=1.0)
+        # min_cutoff: higher = less lag. 90.0+ is near-instant.
+        # beta: higher = adapts faster to motion. 1.5 is very aggressive.
+        self._oef_x = OneEuroFilter(min_cutoff=90.0, beta=1.5)
+        self._oef_y = OneEuroFilter(min_cutoff=90.0, beta=1.5)
         self._oef_active = False
         self._last_sx, self._last_sy = 0.5, 0.5
         self._scroll_suppressed_until = 0.0
@@ -323,6 +338,7 @@ class HandTrackingWorker(QThread):
         self._last_gesture = Gesture.NONE
         self._last_point_time = 0.0
         self._transition_clicked = False
+        self._was_middle_pinching = False
         self._capture_name: Optional[str] = None
         self._capture_buffer: List[List[Dict[str, float]]] = []
 
@@ -389,16 +405,21 @@ class HandTrackingWorker(QThread):
             if os.path.exists(custom_poses_path):
                 self._pose_matcher.load_templates(custom_poses_path)
 
-            last_proc_time = 0.0
+            disable_efficiency_mode()
+            set_high_precision_timer(True)
+            
+            target_period = 0.033  # 30 FPS for liquid smooth performance
+            last_proc_time = time.time()
+            
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     continue
 
                 now = time.time()
-                # Frame skip to prevent lag (limit to ~20FPS)
-                if now - last_proc_time < 0.05:
-                    time.sleep(0.01) # Give the CPU a break
+                dt = now - last_proc_time
+                if dt < target_period:
+                    time.sleep(max(0, target_period - dt - 0.001))
                     continue
                 last_proc_time = now
 
@@ -439,9 +460,6 @@ class HandTrackingWorker(QThread):
                 gesture = classify_gesture(results.hand_landmarks)
 
                 # 3. Priority Resolution:
-                # Basic interaction mechanics (PINCH, POINT) always override custom poses 
-                # to maintain system stability. Otherwise, Custom Poses take priority 
-                # over generic shapes like VICTORY or CALL_ME.
                 if gesture not in [Gesture.PINCH_START, Gesture.POINT]:
                     if pose_match:
                         gesture = pose_match
@@ -455,177 +473,140 @@ class HandTrackingWorker(QThread):
                 ix = hand[8].x  # index tip x
                 iy = hand[8].y  # index tip y
 
-                # Map to active zone (used for all cursor/gesture emission)
                 nx = max(0.0, min(1.0, (ix - zx) / max(0.001, zw)))
                 ny = max(0.0, min(1.0, (iy - zy) / max(0.001, zh)))
 
-                cx, cy = int(ix * w), int(iy * h)
-
-                # Draw landmarks for ALL detected hands over the camera feed output
                 for h_lms in results.hand_landmarks:
                     for lm in h_lms:
                         jx, jy = int(lm.x * w), int(lm.y * h)
                         cv2.circle(frame_rgb, (jx, jy), 4, (200, 100, 255), -1)
                 
-                # ── On-Screen Display (OSD) ───────────────────────────
-                # Display current gesture (built-in or custom string)
                 g_display = gesture if isinstance(gesture, str) else gesture.value
                 cv2.putText(frame_rgb, f"Gesture: {g_display}", (15, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
 
-                # Show recording indicator if capturing a new pose
                 if self._capture_name:
                     cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
                     cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
 
-                # ── Draw Configured Active Display Zone Rectangle ──────────────
+                # ── Draw Configured Active Display Zone ──────────────
                 rect_x1, rect_y1 = int(zx * w), int(zy * h)
                 rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
                 
-                # Draw calibration prompts if active
                 if self._calib_state == 1:
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT of your desired zone", (15, 80),
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
                 elif self._calib_state == 2:
                     cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(ix*w), int(iy*h)), (0, 165, 255), 2)
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT of your desired zone", (15, 80),
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
                 else:
                     cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
                 
-                # Throttle preview emission to ~10 FPS to prevent OOM
                 if now - self._last_preview_time > 0.1:
                     qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                     if not qimg.isNull():
                         self.frame_processed.emit(qimg)
                     self._last_preview_time = now
 
-                # ── Calibration Interception ──────────────────────────
+                # ── Selection / Drag (Middle Pinch) ──────────────────
+                if gesture == Gesture.MIDDLE_PINCH:
+                    dt_proc = max(now - last_proc_time, 0.001)
+                    if not self._oef_active:
+                        self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
+                    sx = self._oef_x.filter(nx, dt_proc)
+                    sy = self._oef_y.filter(ny, dt_proc)
+                    self._last_sx, self._last_sy = sx, sy
+                    
+                    # Emit 'is_down=True' continuously; the coordinator will filter 
+                    # out redundant OS mouse-down commands.
+                    self.middle_pinch_move.emit(sx, sy, True) 
+                    self._was_middle_pinching = True
+                    continue
+
+                if self._was_middle_pinching:
+                    # Release the mouse button
+                    self.middle_pinch_move.emit(self._last_sx, self._last_sy, False)
+                    self._was_middle_pinching = False
+
+                # ── Calibration ──────────────────────────
                 if self._calib_state > 0 and gesture == Gesture.PINCH_START:
                     if self._calib_state == 1:
                         self._calib_tl = (ix, iy)
                         self._calib_state = 2
-                        time.sleep(0.5) # debounce
+                        time.sleep(0.5)
                     elif self._calib_state == 2:
                         tl_x, tl_y = self._calib_tl
-                        # Ensure bottom right is actually below & right of top-left
                         bx, by = max(tl_x, ix), max(tl_y, iy)
                         tx, ty = min(tl_x, ix), min(tl_y, iy)
                         self.settings.update({
-                            "hand_point_x": tx,
-                            "hand_point_y": ty,
-                            "hand_point_w": max(0.1, bx - tx),
-                            "hand_point_h": max(0.1, by - ty)
+                            "hand_point_x": tx, "hand_point_y": ty,
+                            "hand_point_w": max(0.1, bx - tx), "hand_point_h": max(0.1, by - ty)
                         })
                         self._calib_state = 0
                         time.sleep(0.5)
                     continue
 
-                # ── Scroll / Click matching ──────────────────────────────
+                # ── Scroll / Click ──────────────────────────────
                 if gesture == Gesture.PINCH_START:
                     pinch_y = (hand[4].y + hand[8].y) / 2
                     if not self._was_pinching:
                         self._scroll_tracker.begin(pinch_y)
                         self._was_pinching = True
-                        
-                        # Immediate click on transition from POINT (with 150ms buffer)
-                        if (now - self._last_point_time) < 0.15:
-                            logger.debug(f"[HandTracker] Point -> Pinch transition click (Anchored at {self._last_sx:.3f}, {self._last_sy:.3f})")
-                            # Use anchored smoothed coordinates to prevent the 'snap'
-                            self.click.emit(self._last_sx, self._last_sy)
-                            self._transition_clicked = True
-                            # Suppress scrolling for a short window to let the click register
-                            self._scroll_suppressed_until = now + 0.20
-                        else:
-                            self._transition_clicked = False
+                        # Click logic simplified: always handle on release
                     else:
-                        if now < self._scroll_suppressed_until:
-                            # Scrolling is currently blocked to protect the click window
-                            continue
-                            
                         live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 2500))
                         delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
-                        
-                        # Apply Dead-Zone: Don't emit scroll until total movement > 15px
                         if self._scroll_tracker.total_moved > 15:
-                            if abs(delta) > 0.5:
-                                self.scroll.emit(delta)
+                            if abs(delta) > 0.5: self.scroll.emit(delta)
                     continue
 
                 if self._was_pinching:
-                    # If we already clicked on transition, don't double click on release
-                    if self._scroll_tracker.end() and not self._transition_clicked:
-                        # Use anchored coords even for the tap-release if it was recent
+                    if self._scroll_tracker.end():
+                        # Standard release-to-click. Window is 250ms for snappiness.
                         if (now - self._last_point_time) < 0.35:
                             self.click.emit(self._last_sx, self._last_sy)
                         else:
                             self.click.emit(ix, iy)
                     self._was_pinching = False
-                    self._transition_clicked = False
 
-                # ── Point cursor move (One Euro Filter smoothing) ──────────
+                # ── Point ──────────
                 if gesture == Gesture.POINT:
-                    self._last_point_time = now # Track last time we were pointing
-                    
-                    dt = max(now - last_proc_time, 0.001)  # time since last processed frame
+                    self._last_point_time = now
+                    dt_proc = max(now - last_proc_time, 0.001)
                     if not self._oef_active:
-                        # Reset filters on re-entry to avoid snap from stale state
-                        self._oef_x.reset()
-                        self._oef_y.reset()
-                        self._oef_active = True
-                    sx = self._oef_x.filter(nx, dt)
-                    sy = self._oef_y.filter(ny, dt)
-                    
-                    # Store smoothed coords for anchoring future clicks
+                        self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
+                    sx = self._oef_x.filter(nx, dt_proc)
+                    sy = self._oef_y.filter(ny, dt_proc)
                     self._last_sx, self._last_sy = sx, sy
-                    
                     self.cursor_move.emit(sx, sy)
                     continue
                 else:
-                    self._oef_active = False  # Reset on gesture change
+                    self._oef_active = False
 
-                # ── Custom Pose Matching ────────────────────────────
-                # Handle pose learning first
+                # ── Custom Pose Learning ────────────────────────────
                 if self._capture_name and results.hand_landmarks:
                     self._capture_buffer.append(results.hand_landmarks[0])
-                    if len(self._capture_buffer) >= 20: # Capture ~1 second
-                        self._pose_matcher.add_template(
-                            self._capture_name, 
-                            self._capture_buffer[0], 
-                            self._capture_action, 
-                            self._capture_params
-                        )
+                    if len(self._capture_buffer) >= 20:
+                        self._pose_matcher.add_template(self._capture_name, self._capture_buffer[0], self._capture_action, self._capture_params)
                         self._pose_matcher.save_templates("core/custom_poses.json")
-                        logger.info(f"Learned and saved pose: {self._capture_name}")
-                        self._capture_name = None
-                        self._capture_action = "none"
-                        self._capture_params = None
-                        self._capture_buffer = []
+                        self._capture_name = None; self._capture_buffer = []
 
-
-                # ── Discrete gestures (hold-to-trigger) ────────────────────────
+                # ── Discrete gestures ────────────────────────
                 if gesture not in (Gesture.NONE, Gesture.POINT, Gesture.PINCH_START):
                     hold_duration = float(self.settings.get("gesture_hold_seconds", 2.0))
-
                     if gesture != self._hold_gesture:
-                        # Gesture changed — reset hold timer
-                        self._hold_gesture = gesture
-                        self._hold_start   = now
-                        self._hold_fired   = False
+                        self._hold_gesture = gesture; self._hold_start = now; self._hold_fired = False
                     elif not self._hold_fired:
-                        elapsed = now - self._hold_start
-                        if elapsed >= hold_duration:
+                        if (now - self._hold_start) >= hold_duration:
                             gname = gesture if isinstance(gesture, str) else gesture.value
-                            logger.debug(f"[HandTracker] Hold-triggered gesture: {gname} ({elapsed:.2f}s)")
                             self.gesture_detected.emit(gname, nx, ny)
-                            self._hold_fired = True  # don't re-fire until gesture changes
+                            self._hold_fired = True
                 else:
-                    # Not a discrete gesture — reset hold state
                     if gesture != self._hold_gesture:
-                        self._hold_gesture = gesture
-                        self._hold_fired   = False
+                        self._hold_gesture = gesture; self._hold_fired = False
                 
                 self._last_gesture = gesture
 
@@ -633,6 +614,7 @@ class HandTrackingWorker(QThread):
             cap.release()
             if landmarker:
                 landmarker.close()
+            set_high_precision_timer(False)
             logger.info(f"Hand tracking stopped (camera {self.camera_index})")
 
     def stop(self):
@@ -660,11 +642,18 @@ class HandTracker(QObject):
     action_stop_speaking = pyqtSignal()
     custom_gesture       = pyqtSignal(str, str, dict) # name, action, params
     frame_processed      = pyqtSignal(object)
+    # Selection/Drag: (x, y, is_down)
+    middle_pinch_move    = pyqtSignal(float, float, bool)
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
+        self._sys_manager = SystemGestureManager()
         self._worker: Optional[HandTrackingWorker] = None
+
+    def reload_system_gestures(self):
+        self._sys_manager.load()
+        logger.info("HandTracker: Reloaded system gesture mappings.")
 
     def start(self, camera_index: int = 0):
         if self._worker:
@@ -674,12 +663,16 @@ class HandTracker(QObject):
             
         self._worker = HandTrackingWorker(self.settings, camera_index, self)
         self._worker.gesture_detected.connect(self._on_gesture)
-        self._worker.scroll.connect(self.scroll)
-        self._worker.cursor_move.connect(self.cursor_move)
-        self._worker.click.connect(self.click)
+        
+        # Use DirectConnection for performance-critical signals to bypass UI thread throttling
+        self._worker.scroll.connect(self.scroll, Qt.ConnectionType.DirectConnection)
+        self._worker.cursor_move.connect(self.cursor_move, Qt.ConnectionType.DirectConnection)
+        self._worker.click.connect(self.click, Qt.ConnectionType.DirectConnection)
+        self._worker.middle_pinch_move.connect(self.middle_pinch_move, Qt.ConnectionType.DirectConnection)
         self._worker.error.connect(self.error)
         self._worker.frame_processed.connect(self.frame_processed)
-        self._worker.start()
+        self._worker.start(QThread.Priority.HighPriority)
+        logger.info(f"HandTracker: Worker started (Priority: High)")
 
     def start_calibration(self):
         if self._worker:
@@ -709,23 +702,32 @@ class HandTracker(QObject):
 
     def _on_gesture(self, gesture_str: str, x: float, y: float):
         self.gesture.emit(gesture_str, x, y)
-
-        # Map built-in gestures to high-level system signals
-        mapping = {
-            Gesture.CLAP.value:      self.action_open_overlay,
-            Gesture.BOTH_PALMS.value: self.action_open_overlay,
-            Gesture.FIST.value:      self.action_close_overlay,
-            Gesture.THUMBS_UP.value: self.action_confirm,
-            Gesture.CALL_ME.value:   self.action_cancel,
-            Gesture.OPEN_PALM.value: self.action_stop_speaking,
-        }
         
-        signal = mapping.get(gesture_str)
-        if signal:
-            signal.emit()
-            return
+        # 1. Check System Gesture Mapping
+        sys_data = self._sys_manager.get_action_for_gesture(gesture_str)
+        if sys_data and sys_data.get("enabled", True):
+            action = sys_data.get("action", "none")
+            params = sys_data.get("params", {})
+            
+            # Map system actions to high-level signals
+            if action == "toggle_overlay":
+                self.action_open_overlay.emit()
+            elif action == "close_overlay":
+                self.action_close_overlay.emit()
+            elif action == "confirm":
+                self.action_confirm.emit()
+            elif action == "cancel":
+                self.action_cancel.emit()
+            elif action == "stop_speaking":
+                self.action_stop_speaking.emit()
+            elif action == "launch_app":
+                self.custom_gesture.emit(gesture_str, action, params)
+            
+            # If we handled it as a system gesture, we're done
+            if action != "none":
+                return
 
-        # If it's not a built-in signal, check the custom pose library
+        # 2. Check Custom Pose Library (only if no system action was defined/enabled)
         if self._worker and self._worker.isRunning():
             pose_data = self._worker._pose_matcher.get_action_for_pose(gesture_str)
             if pose_data:

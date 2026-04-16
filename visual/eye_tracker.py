@@ -28,7 +28,9 @@ import logging
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt
+
+from visual.platform_win import disable_efficiency_mode, set_high_precision_timer
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -312,10 +314,24 @@ class EyeTrackingWorker(QThread):
             )
             landmarker = FaceLandmarker.create_from_options(options)
 
+            # Initialise performance tweaks
+            disable_efficiency_mode()
+            set_high_precision_timer(True)
+            
+            target_period = 0.033  # ~30 FPS for eye tracking
+            last_proc_time = time.time()
+
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     continue
+                    
+                now = time.time()
+                dt = now - last_proc_time
+                if dt < target_period:
+                    time.sleep(max(0, target_period - dt - 0.001))
+                    continue
+                last_proc_time = now
 
                 h, w = frame.shape[:2]
                 rgb  = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
@@ -402,6 +418,7 @@ class EyeTrackingWorker(QThread):
             cap.release()
             if landmarker:
                 landmarker.close()
+            set_high_precision_timer(False)
             logger.info(f"Eye tracking stopped (camera {self.camera_index})")
 
     def stop(self):
@@ -426,12 +443,14 @@ class EyeTracker(QObject):
         if self._worker and self._worker.isRunning():
             return
         self._worker = EyeTrackingWorker(self.settings, camera_index, self)
-        self._worker.gaze_point.connect(self.gaze_point)
-        self._worker.dwell_click.connect(self.dwell_click)
+        # Use DirectConnection for performance-critical signals to bypass UI thread throttling
+        self._worker.gaze_point.connect(self.gaze_point, Qt.ConnectionType.DirectConnection)
+        self._worker.dwell_click.connect(self.dwell_click, Qt.ConnectionType.DirectConnection)
+        
         self._worker.calibration_progress.connect(self.calibration_progress)
         self._worker.calibration_complete.connect(self.calibration_complete)
         self._worker.error.connect(self.error)
-        self._worker.start()
+        self._worker.start(QThread.Priority.HighPriority)
 
     def stop(self):
         if self._worker:

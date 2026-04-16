@@ -1,0 +1,41 @@
+{
+  "clap": {
+    "enabled": false,
+    "action": "toggle_overlay",
+    "params": {}
+  },
+  "both_palms": {
+    "enabled": true,
+    "action": "toggle_overlay",
+    "params": {}
+  },
+  "fist": {
+    "enabled": false,
+    "action": "close_overlay",
+    "params": {}
+  },
+  "thumbs_up": {
+    "enabled": false,
+    "action": "confirm",
+    "params": {}
+  },
+  "call_me": {
+    "enabled": true,
+    "action": "launch_app",
+    "params": {
+      "uri": "C:\\Users\\Manas\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord Inc\\Discord.lnk"
+    }
+  },
+  "open_palm": {
+    "enabled": true,
+    "action": "none",
+    "params": {}
+  },
+  "victory": {
+    "enabled": false,
+    "action": "launch_app",
+    "params": {
+      "uri": "C:\\Users\\Manas\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd"
+    }
+  }
+}

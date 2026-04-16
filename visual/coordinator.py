@@ -18,7 +18,8 @@ import sys
 import logging
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QMutex, QMutexLocker
+import time
 
 from visual.hand_tracker import HandTracker
 from visual.eye_tracker import EyeTracker
@@ -119,6 +120,23 @@ class CursorController:
         except Exception:
             pass
 
+    def set_mouse_pressed(self, down: bool):
+        """Set the left mouse button to a pressed (down) or released (up) state."""
+        try:
+            if self._system == "Windows":
+                import ctypes
+                # 0x0002 = LEFTDOWN, 0x0004 = LEFTUP
+                event = 0x0002 if down else 0x0004
+                ctypes.windll.user32.mouse_event(event, 0, 0, 0, 0)
+            else:
+                import pyautogui
+                if down:
+                    pyautogui.mouseDown()
+                else:
+                    pyautogui.mouseUp()
+        except Exception:
+            pass
+
 
 class VisualCoordinator(QObject):
     """
@@ -150,6 +168,7 @@ class VisualCoordinator(QObject):
         # Initialize logging
         setup_logging("eye_tracking_debug.log")
         logger.info("VisualCoordinator initialized")
+        self._is_dragging = False
 
         self.settings = settings
         self._cursor  = CursorController()
@@ -163,6 +182,7 @@ class VisualCoordinator(QObject):
         
         self.sign_language_active = False
         self._current_camera = self.settings.get("visual_camera", 0)
+        self._cursor_lock = QMutex()
 
         self._wire()
 
@@ -175,26 +195,29 @@ class VisualCoordinator(QObject):
         self.hand_tracker.action_stop_speaking.connect(self.action_stop_speaking)
 
         # Hand scroll → OS scroll
-        self.hand_tracker.scroll.connect(self._cursor.scroll)
+        self.hand_tracker.scroll.connect(self._cursor.scroll, Qt.ConnectionType.DirectConnection)
 
         # Hand point → cursor move (throttled in handler)
-        self.hand_tracker.cursor_move.connect(self._on_hand_cursor)
+        self.hand_tracker.cursor_move.connect(self._on_hand_cursor, Qt.ConnectionType.DirectConnection)
 
         # Hand click
         self.hand_tracker.click.connect(
-            lambda x, y: self._cursor.click_at(x, y)
+            lambda x, y: self._cursor.click_at(x, y),
+            Qt.ConnectionType.DirectConnection
         )
+        self.hand_tracker.middle_pinch_move.connect(self._on_hand_drag, Qt.ConnectionType.DirectConnection)
 
         self.hand_tracker.error.connect(self.error)
         self.hand_tracker.frame_processed.connect(self.frame_processed)
         self.hand_tracker.custom_gesture.connect(self._on_custom_gesture)
 
         # Eye gaze → cursor (throttled)
-        self.eye_tracker.gaze_point.connect(self._on_gaze)
+        self.eye_tracker.gaze_point.connect(self._on_gaze, Qt.ConnectionType.DirectConnection)
 
         # Eye dwell → click
         self.eye_tracker.dwell_click.connect(
-            lambda x, y: self._cursor.click_at(x, y)
+            lambda x, y: self._cursor.click_at(x, y),
+            Qt.ConnectionType.DirectConnection
         )
 
         self.eye_tracker.calibration_progress.connect(self.calibration_progress)
@@ -204,19 +227,37 @@ class VisualCoordinator(QObject):
     # ── Throttled handlers ────────────────────────────────────────────────────
 
     def _on_hand_cursor(self, x: float, y: float):
-        import time
         now = time.time()
-        if now - self._last_cursor_move >= self._cursor_interval:
-            self._cursor.move_to(x, y)
+        with QMutexLocker(self._cursor_lock):
+            if now - self._last_cursor_move < self._cursor_interval:
+                return
             self._last_cursor_move = now
+            
+        self._cursor.move_to(x, y)
+
+    def _on_hand_drag(self, x: float, y: float, is_down: bool):
+        """Handler for middle-pinch drag gesture."""
+        # Selection/dragging requires high precision; always move
+        self._cursor.move_to(x, y)
+        
+        # Only set mouse state if it has changed to avoid driver flooding
+        if is_down and not self._is_dragging:
+            self._cursor.set_mouse_pressed(True)
+            self._is_dragging = True
+            self.status.emit("Selecting...")
+        elif not is_down and self._is_dragging:
+            self._cursor.set_mouse_pressed(False)
+            self._is_dragging = False
+            self.status.emit("Selection released")
 
     def _on_gaze(self, x: float, y: float):
-        import time
         now = time.time()
-        # Eye tracking cursor update only if hand tracking isn't actively pointing
-        if now - self._last_cursor_move >= self._cursor_interval:
-            self._cursor.move_to(x, y)
+        with QMutexLocker(self._cursor_lock):
+            if now - self._last_cursor_move < self._cursor_interval:
+                return
             self._last_cursor_move = now
+            
+        self._cursor.move_to(x, y)
 
     def _on_custom_gesture(self, name: str, action: str, params: dict):
         logger.info(f"[Coordinator] Custom pose recognized: {name} -> {action}")
@@ -256,6 +297,9 @@ class VisualCoordinator(QObject):
     def learn_pose(self, name: str, action: str = "none", params: dict = None):
         self.hand_tracker.learn_pose(name, action, params)
         self.status.emit(f"Learning pose: {name}. Hold still for 2 seconds...")
+
+    def reload_system_gestures(self):
+        self.hand_tracker.reload_system_gestures()
 
     def delete_pose(self, name: str):
         if self.hand_active:

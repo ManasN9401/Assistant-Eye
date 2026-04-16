@@ -150,25 +150,7 @@ class VisualSettingsPage(QWidget):
         vb.addWidget(calib_hand_btn)
 
 
-        # Gesture reference
-        vb.addWidget(_label("Quick gesture reference", "label-field"))
-        gesture_info = QTextEdit()
-        gesture_info.setReadOnly(True)
-        gesture_info.setMaximumHeight(130)
-        gesture_info.setStyleSheet(
-            "QTextEdit { background:#0a0a0d; border:1px solid #1f1f26; "
-            "color:#71717a; font-size:11px; font-family:'Courier New',monospace; }"
-        )
-        gesture_info.setPlainText(
-            "SNAP (middle+thumb pinch)  → Confirm action\n"
-            "CLAP (both hands clap)     → Open/Close overlay\n"
-            "OPEN PALM                  → Stop speaking\n"
-            "CALL ME (thumb+pinky)      → Cancel\n"
-            "PINCH + move up/down       → Scroll page\n"
-            "QUICK PINCH                → Click\n"
-            "POINT (index only)         → Move cursor"
-        )
-        vb.addWidget(gesture_info)
+        # (Removed static gesture reference — now managed in Gesture Lab)
 
         vb.addWidget(_divider())
 

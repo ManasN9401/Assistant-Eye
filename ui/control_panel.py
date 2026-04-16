@@ -9,7 +9,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QPlainTextEdit, QPushButton, QSizePolicy, QSlider,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSlider,
     QSpacerItem, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -400,9 +400,20 @@ class SettingsPage(QWidget):
         self._build()
 
     def _build(self):
-        vb = QVBoxLayout(self)
+        # ── Setup Scroll Area ─────────────────────────────────
+        top_layout = QVBoxLayout(self)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        
+        container = QWidget()
+        container.setObjectName("scroll-container")
+        vb = QVBoxLayout(container)
         vb.setContentsMargins(28, 28, 28, 28)
         vb.setSpacing(14)
+
         vb.addWidget(_label("Settings", "section-title"))
         vb.addWidget(_label("Personalise your assistant.", "section-sub"))
 
@@ -433,7 +444,11 @@ class SettingsPage(QWidget):
         btn.setFixedWidth(140)
         btn.clicked.connect(self._save)
         vb.addWidget(btn)
-        vb.addSpacerItem(_spacer(h=False))
+        
+        vb.addStretch() # Push everything up
+        
+        scroll.setWidget(container)
+        top_layout.addWidget(scroll)
 
     def _save(self):
         self.settings.update({
@@ -584,7 +599,13 @@ class ControlPanel(QMainWindow):
                 else self.visual.stop_eye_tracking()
             )
             self._visual_page.start_calibration.connect(self.visual.start_calibration)
+            self._visual_page.start_hand_calibration.connect(self.visual.start_hand_calibration)
             self._visual_page.advance_calibration.connect(self.visual.advance_calibration)
+            
+            # Gesture Lab connections
+            self._gesture_lab.learn_pose_requested.connect(self.visual.learn_pose)
+            self._gesture_lab.delete_pose_requested.connect(self.visual.delete_pose)
+            self._gesture_lab.system_gestures_updated.connect(self.visual.reload_system_gestures)
             self.visual.calibration_progress.connect(
                 lambda n: self._visual_page.set_calibration_status(
                     f"Calibrating — point {n+1} of {9} collected"
@@ -602,6 +623,8 @@ class ControlPanel(QMainWindow):
             # Gesture Lab Integration
             self._gesture_lab.learn_pose_requested.connect(self.visual.learn_pose)
             self._gesture_lab.delete_pose_requested.connect(self.visual.delete_pose)
+            self._gesture_lab.system_gestures_updated.connect(self.visual.reload_system_gestures)
+            self._gesture_lab.request_main_tab.connect(self._switch_page)
             
             # Execute actions from coordinator
             self.visual.execute_custom_action.connect(self._on_custom_action)
