@@ -6,12 +6,17 @@
   },
   "both_palms": {
     "enabled": true,
-    "action": "toggle_overlay",
+    "action": "toggle_hand_tracking",
     "params": {}
   },
-  "fist": {
+  "fist_left": {
     "enabled": false,
-    "action": "close_overlay",
+    "action": "none",
+    "params": {}
+  },
+  "fist_right": {
+    "enabled": true,
+    "action": "toggle_overlay",
     "params": {}
   },
   "thumbs_up": {

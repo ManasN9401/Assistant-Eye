@@ -34,9 +34,14 @@ class SystemGestureManager:
         except Exception as e:
             logger.error(f"Failed to save system gestures: {e}")
 
-    def get_action_for_gesture(self, gesture_name: str) -> dict:
+    def get_action_for_gesture(self, gesture_name: str, hand_side: str = None) -> dict:
         """Returns {enabled: bool, action: str, params: dict} or None."""
-        return self.mappings.get(gesture_name.lower())
+        g_lower = gesture_name.lower()
+        if hand_side:
+            specific_key = f"{g_lower}_{hand_side.lower()}"
+            if specific_key in self.mappings:
+                return self.mappings[specific_key]
+        return self.mappings.get(g_lower)
 
     def update_mapping(self, gesture_name: str, enabled: bool, action: str, params: dict = None):
         self.mappings[gesture_name.lower()] = {

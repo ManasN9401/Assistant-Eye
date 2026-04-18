@@ -76,3 +76,29 @@ def set_high_precision_timer(enable: bool):
             logger.debug("Windows: System timer resolution restored.")
     except Exception as e:
         logger.error(f"Failed to set timer resolution: {e}")
+
+# ── Process Priority ──────────────────────────────────────────────────────────
+def set_high_priority():
+    """Sets the process priority to HIGH_PRIORITY_CLASS so tracking stays smooth."""
+    try:
+        if os.name != "nt":
+            return False
+            
+        kernel32 = ctypes.windll.kernel32
+        pid = os.getpid()
+        # PROCESS_ALL_ACCESS might not be strictly needed, but PROCESS_SET_INFORMATION is
+        handle = kernel32.OpenProcess(0x0200, False, pid) 
+        if not handle:
+            return False
+            
+        HIGH_PRIORITY_CLASS = 0x00000080
+        res = kernel32.SetPriorityClass(handle, HIGH_PRIORITY_CLASS)
+        kernel32.CloseHandle(handle)
+        
+        if res:
+            logger.info("Windows: Process priority set to HIGH.")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to set process priority: {e}")
+        return False

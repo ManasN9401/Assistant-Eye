@@ -110,6 +110,19 @@ class VisualSettingsPage(QWidget):
         sens_row.addWidget(self._sens_lbl)
         vb.addLayout(sens_row)
 
+        vb.addWidget(_label("Tracking FPS (Smoothness)", "label-field"))
+        fps_row = QHBoxLayout()
+        self._fps_slider = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._fps_slider.setRange(10, 60)
+        self._fps_slider.setValue(int(self.settings.get("tracking_fps", 30)))
+        self._fps_lbl = QLabel(f"{self._fps_slider.value()} FPS")
+        self._fps_lbl.setObjectName("label-mono")
+        self._fps_lbl.setFixedWidth(50)
+        self._fps_slider.valueChanged.connect(lambda v: self._fps_lbl.setText(f"{v} FPS"))
+        fps_row.addWidget(self._fps_slider)
+        fps_row.addWidget(self._fps_lbl)
+        vb.addLayout(fps_row)
+
         vb.addWidget(_label("Gesture hold duration (seconds)", "label-field"))
         hold_row = QHBoxLayout()
         self._hold_dur = NoScrollSlider(Qt.Orientation.Horizontal)
@@ -214,6 +227,7 @@ class VisualSettingsPage(QWidget):
             "hand_point_w":           self._hw.value() / 100.0,
             "hand_point_h":           self._hh.value() / 100.0,
             "gesture_hold_seconds":   self._hold_dur.value() / 10.0,
+            "tracking_fps":           self._fps_slider.value(),
         })
         self.settings_changed.emit()
 
