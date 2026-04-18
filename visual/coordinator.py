@@ -67,11 +67,22 @@ class CursorController:
     def move_to(self, x_norm: float, y_norm: float):
         """Move cursor to normalised position (0–1, 0–1)."""
         px = int(x_norm * self._screen_w)
+        px = int(x_norm * self._screen_w)
         py = int(y_norm * self._screen_h)
         self._set_pos(px, py)
 
+    def move_rel(self, dx_norm: float, dy_norm: float):
+        """Relative movement based on normalized screen fractions."""
+        dx = int(dx_norm * self._screen_w)
+        dy = int(dy_norm * self._screen_h)
+        self._move_rel(dx, dy)
+
     def click_at(self, x_norm: float, y_norm: float):
         self.move_to(x_norm, y_norm)
+        self._click()
+
+    def click_current(self):
+        """Click at the current OS cursor position."""
         self._click()
 
     def scroll(self, dy: float):
@@ -105,6 +116,18 @@ class CursorController:
                 except Exception:
                     import pyautogui
                     pyautogui.moveTo(x, y, duration=0)
+        except Exception:
+            pass
+
+    def _move_rel(self, dx: int, dy: int):
+        try:
+            if self._system == "Windows":
+                import ctypes
+                # 0x0001 = MOUSEEVENTF_MOVE
+                ctypes.windll.user32.mouse_event(0x0001, dx, dy, 0, 0)
+            else:
+                import pyautogui
+                pyautogui.moveRel(dx, dy, duration=0)
         except Exception:
             pass
 
@@ -199,13 +222,12 @@ class VisualCoordinator(QObject):
 
         # Hand point → cursor move (throttled in handler)
         self.hand_tracker.cursor_move.connect(self._on_hand_cursor, Qt.ConnectionType.DirectConnection)
+        self.hand_tracker.cursor_rel_move.connect(self._on_hand_rel_cursor, Qt.ConnectionType.DirectConnection)
 
         # Hand click
-        self.hand_tracker.click.connect(
-            lambda x, y: self._cursor.click_at(x, y),
-            Qt.ConnectionType.DirectConnection
-        )
+        self.hand_tracker.click.connect(self._on_hand_click, Qt.ConnectionType.DirectConnection)
         self.hand_tracker.middle_pinch_move.connect(self._on_hand_drag, Qt.ConnectionType.DirectConnection)
+        self.hand_tracker.middle_pinch_rel_move.connect(self._on_hand_rel_drag, Qt.ConnectionType.DirectConnection)
 
         self.hand_tracker.error.connect(self.error)
         self.hand_tracker.frame_processed.connect(self.frame_processed)
@@ -235,12 +257,34 @@ class VisualCoordinator(QObject):
             
         self._cursor.move_to(x, y)
 
+    def _on_hand_click(self, x: float, y: float):
+        if self.settings.get("hand_relative_mode", False):
+            self._cursor.click_current()
+        else:
+            self._cursor.click_at(x, y)
+
+    def _on_hand_rel_cursor(self, dx: float, dy: float):
+        self._cursor.move_rel(dx, dy)
+        self._last_cursor_move = time.time()
+
     def _on_hand_drag(self, x: float, y: float, is_down: bool):
         """Handler for middle-pinch drag gesture."""
         # Selection/dragging requires high precision; always move
         self._cursor.move_to(x, y)
         
         # Only set mouse state if it has changed to avoid driver flooding
+        if is_down and not self._is_dragging:
+            self._cursor.set_mouse_pressed(True)
+            self._is_dragging = True
+            self.status.emit("Selecting...")
+        elif not is_down and self._is_dragging:
+            self._cursor.set_mouse_pressed(False)
+            self._is_dragging = False
+
+    def _on_hand_rel_drag(self, dx: float, dy: float, is_down: bool):
+        """Handler for relative middle-pinch drag gesture."""
+        self._cursor.move_rel(dx, dy)
+        
         if is_down and not self._is_dragging:
             self._cursor.set_mouse_pressed(True)
             self._is_dragging = True

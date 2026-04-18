@@ -322,6 +322,10 @@ class HandTrackingWorker(QThread):
     custom_pose_detected = pyqtSignal(str) # Emits pose name
     # (x, y, is_pressed)
     middle_pinch_move = pyqtSignal(float, float, bool)
+    # (dx, dy, is_pressed)
+    middle_pinch_rel_move = pyqtSignal(float, float, bool)
+    # (dx, dy) - for trackpad-style relative movement
+    cursor_rel_move = pyqtSignal(float, float)
 
     def __init__(self, settings, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -359,6 +363,13 @@ class HandTrackingWorker(QThread):
         self._was_middle_pinching = False
         self._capture_name: Optional[str] = None
         self._capture_buffer: List[List[Dict[str, float]]] = []
+        
+        # Stability & Persistence
+        self._last_results = None
+        self._last_results_time = 0.0
+        # Default 100ms (0.1s); can be tuned in UI
+        self._persistence_threshold = float(self.settings.get("hand_persistence_seconds", 0.1))
+        self._is_point_anchored = False
 
     def trigger_calibration(self):
         self._calib_state = 1
@@ -436,6 +447,9 @@ class HandTrackingWorker(QThread):
                 target_fps = int(self.settings.get("tracking_fps", 30))
                 target_period = 1.0 / target_fps
                 
+                # Fetch persistence threshold dynamically
+                self._persistence_threshold = float(self.settings.get("hand_persistence_seconds", 0.1))
+
                 # ── Timing & FPS ──
                 now = time.time()
                 dt = now - last_proc_time
@@ -463,6 +477,17 @@ class HandTrackingWorker(QThread):
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
                 results = landmarker.detect(image)
 
+                # Persistence Logic: If hand is blinking out, use last valid results
+                is_ghost = False
+                if not results.hand_landmarks and self._last_results:
+                    if (now - self._last_results_time) < self._persistence_threshold:
+                        results = self._last_results
+                        is_ghost = True
+                
+                if results.hand_landmarks and not is_ghost:
+                    self._last_results = results
+                    self._last_results_time = now
+
                 if not results.hand_landmarks:
                     if self._was_pinching:
                         if self._scroll_tracker.end() and not self._tracking_paused:  # quick tap = click
@@ -471,6 +496,9 @@ class HandTrackingWorker(QThread):
                     
                     for state in self._hand_states.values():
                         state.reset()
+                    
+                    self._oef_active = False
+                    self._is_point_anchored = False
                     
                     qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                     self.frame_processed.emit(qimg)
@@ -532,66 +560,87 @@ class HandTrackingWorker(QThread):
                     nx = max(0.0, min(1.0, (ix - zx) / max(0.001, zw)))
                     ny = max(0.0, min(1.0, (iy - zy) / max(0.001, zh)))
 
-                    for lm in hand:
-                        jx, jy = int(lm.x * w), int(lm.y * h)
-                        # Color code: Right = Magenta, Left = Cyan
-                        color = (255, 100, 200) if side == "Right" else (255, 200, 100)
-                        cv2.circle(frame_rgb, (jx, jy), 4, color, -1)
+                    # 5. Smooth coordinates (Primary tracking hand)
+                    dt_proc = max(now - last_proc_time, 0.001)
+                    if not self._oef_active:
+                        self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
+                    sx = self._oef_x.filter(nx, dt_proc)
+                    sy = self._oef_y.filter(ny, dt_proc)
+
+                    if not is_ghost:
+                        for lm in hand:
+                            jx, jy = int(lm.x * w), int(lm.y * h)
+                            # Color code: Right = Magenta, Left = Cyan
+                            color = (255, 100, 200) if side == "Right" else (255, 200, 100)
+                            cv2.circle(frame_rgb, (jx, jy), 4, color, -1)
+                        
+                        g_display = gesture if isinstance(gesture, str) else gesture.value
+                        cv2.putText(frame_rgb, f"{side}: {g_display}", (15, 40 + (i * 30)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
+                    else:
+                        # Optional: Draw a subtle indicator that ghost tracking is active
+                        cv2.putText(frame_rgb, "[GHOST TRACKING]", (15, 40 + (i * 30)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+
+                    if self._tracking_paused:
+                        cv2.putText(frame_rgb, "TRACKING PAUSED", (15, 80),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+
+                    if self._capture_name:
+                        cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+                        cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
+
+                    # ── Draw Configured Active Display Zone ──────────────
+                    rect_x1, rect_y1 = int(zx * w), int(zy * h)
+                    rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
                     
-                    g_display = gesture if isinstance(gesture, str) else gesture.value
-                    cv2.putText(frame_rgb, f"{side}: {g_display}", (15, 40 + (i * 30)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
-
-                if self._tracking_paused:
-                    cv2.putText(frame_rgb, "TRACKING PAUSED", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-
-                if self._capture_name:
-                    cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                    cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
-
-                # ── Draw Configured Active Display Zone ──────────────
-                rect_x1, rect_y1 = int(zx * w), int(zy * h)
-                rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
-                
-                if self._calib_state == 1:
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
-                elif self._calib_state == 2:
-                    cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(ix*w), int(iy*h)), (0, 165, 255), 2)
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
-                else:
-                    cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
-                
-                if now - self._last_preview_time > 0.1:
-                    qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
-                    if not qimg.isNull():
-                        self.frame_processed.emit(qimg)
-                    self._last_preview_time = now
+                    if self._calib_state == 1:
+                        cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                    elif self._calib_state == 2:
+                        cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(ix*w), int(iy*h)), (0, 165, 255), 2)
+                        cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                    else:
+                        cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
+                    
+                    if now - self._last_preview_time > 0.1:
+                        qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                        if not qimg.isNull():
+                            self.frame_processed.emit(qimg)
+                        self._last_preview_time = now
 
                     # ── Right Hand Exclusives ──
                     if side == "Right":
                         # ── Selection / Drag (Middle Pinch) ──────────────────
                         if gesture == Gesture.MIDDLE_PINCH:
-                            dt_proc = max(now - last_proc_time, 0.001)
-                            if not self._oef_active:
-                                self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
-                            sx = self._oef_x.filter(nx, dt_proc)
-                            sy = self._oef_y.filter(ny, dt_proc)
-                            self._last_sx, self._last_sy = sx, sy
-                            
                             if not self._tracking_paused:
-                                self.middle_pinch_move.emit(sx, sy, True) 
+                                if self.settings.get("hand_relative_mode", False):
+                                    if not self._is_point_anchored:
+                                        self._is_point_anchored = True
+                                    else:
+                                        sens = float(self.settings.get("hand_relative_sensitivity", 2.0))
+                                        dx = (sx - self._last_sx) * sens
+                                        dy = (sy - self._last_sy) * sens
+                                        self.middle_pinch_rel_move.emit(dx, dy, True)
+                                else:
+                                    self._is_point_anchored = False
+                                    self.middle_pinch_move.emit(sx, sy, True) 
+
+                            self._last_sx, self._last_sy = sx, sy
                             self._was_middle_pinching = True
                             continue
 
                         if self._was_middle_pinching:
                             if not self._tracking_paused:
-                                self.middle_pinch_move.emit(self._last_sx, self._last_sy, False)
+                                if self.settings.get("hand_relative_mode", False):
+                                    self.middle_pinch_rel_move.emit(0, 0, False)
+                                else:
+                                    self.middle_pinch_move.emit(self._last_sx, self._last_sy, False)
                             self._was_middle_pinching = False
+                            self._is_point_anchored = False # Reset anchor on release
 
                         # ── Calibration ──────────────────────────
                         if self._calib_state > 0 and gesture == Gesture.PINCH_START:
@@ -623,6 +672,7 @@ class HandTrackingWorker(QThread):
                                 if self._scroll_tracker.total_moved > 15:
                                     if abs(delta) > 0.5 and not self._tracking_paused: 
                                         self.scroll.emit(delta)
+                            self._last_sx, self._last_sy = sx, sy
                             continue
 
                         if self._was_pinching:
@@ -637,17 +687,28 @@ class HandTrackingWorker(QThread):
                         # ── Point ──────────
                         if gesture == Gesture.POINT:
                             self._last_point_time = now
-                            dt_proc = max(now - last_proc_time, 0.001)
-                            if not self._oef_active:
-                                self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
-                            sx = self._oef_x.filter(nx, dt_proc)
-                            sy = self._oef_y.filter(ny, dt_proc)
+                            
+                            # Relative Mode Logic
+                            if self.settings.get("hand_relative_mode", False):
+                                if not self._is_point_anchored:
+                                    self._is_point_anchored = True
+                                    # Don't move on first frame, just set anchor
+                                else:
+                                    # nx/ny are 0..1, convert distance to pixels via sensitivity
+                                    sens = float(self.settings.get("hand_relative_sensitivity", 2.0))
+                                    dx = (sx - self._last_sx) * sens
+                                    dy = (sy - self._last_sy) * sens
+                                    if not self._tracking_paused:
+                                        self.cursor_rel_move.emit(dx, dy)
+                            else:
+                                self._is_point_anchored = False
+                                if not self._tracking_paused:
+                                    self.cursor_move.emit(sx, sy)
+                                    
                             self._last_sx, self._last_sy = sx, sy
-                            if not self._tracking_paused:
-                                self.cursor_move.emit(sx, sy)
                             continue
                         else:
-                            self._oef_active = False
+                            self._is_point_anchored = False
 
                 # ── Custom Pose Learning ────────────────────────────
                 if self._capture_name and results.hand_landmarks:
@@ -671,8 +732,10 @@ class HandTrackingWorker(QThread):
                     if gesture != state.hold_gesture:
                         state.hold_gesture = gesture; state.hold_fired = False
                 
-                state.last_discrete_gesture = gesture
-                self._last_gesture = gesture
+                    state.last_discrete_gesture = gesture
+                    self._last_gesture = gesture
+
+                last_proc_time = now
 
 
         finally:
@@ -709,6 +772,9 @@ class HandTracker(QObject):
     frame_processed      = pyqtSignal(object)
     # Selection/Drag: (x, y, is_down)
     middle_pinch_move    = pyqtSignal(float, float, bool)
+    middle_pinch_rel_move = pyqtSignal(float, float, bool)
+    # Relative movement: (dx, dy)
+    cursor_rel_move      = pyqtSignal(float, float)
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -733,7 +799,9 @@ class HandTracker(QObject):
         self._worker.scroll.connect(self.scroll, Qt.ConnectionType.DirectConnection)
         self._worker.cursor_move.connect(self.cursor_move, Qt.ConnectionType.DirectConnection)
         self._worker.click.connect(self.click, Qt.ConnectionType.DirectConnection)
+        self._worker.cursor_rel_move.connect(self.cursor_rel_move, Qt.ConnectionType.DirectConnection)
         self._worker.middle_pinch_move.connect(self.middle_pinch_move, Qt.ConnectionType.DirectConnection)
+        self._worker.middle_pinch_rel_move.connect(self.middle_pinch_rel_move, Qt.ConnectionType.DirectConnection)
         self._worker.error.connect(self.error)
         self._worker.frame_processed.connect(self.frame_processed)
         self._worker.start(QThread.Priority.HighPriority)

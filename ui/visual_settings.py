@@ -110,6 +110,37 @@ class VisualSettingsPage(QWidget):
         sens_row.addWidget(self._sens_lbl)
         vb.addLayout(sens_row)
 
+        self._relative_mode = QCheckBox("Trackpad Mode (Relative movement)")
+        self._relative_mode.setChecked(self.settings.get("hand_relative_mode", False))
+        self._relative_mode.setToolTip("Cursor moves relative to hand movement instead of snapping to camera coordinates.")
+        vb.addWidget(self._relative_mode)
+
+        vb.addWidget(_label("Relative cursor sensitivity", "label-field"))
+        rel_sens_row = QHBoxLayout()
+        self._relative_sens = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._relative_sens.setRange(5, 100)  # 0.5x to 10.0x
+        self._relative_sens.setValue(int(self.settings.get("hand_relative_sensitivity", 2.0) * 10))
+        self._rel_sens_lbl = QLabel(f"{self._relative_sens.value() / 10:.1f}x")
+        self._rel_sens_lbl.setObjectName("label-mono")
+        self._rel_sens_lbl.setFixedWidth(40)
+        self._relative_sens.valueChanged.connect(lambda v: self._rel_sens_lbl.setText(f"{v/10:.1f}x"))
+        rel_sens_row.addWidget(self._relative_sens)
+        rel_sens_row.addWidget(self._rel_sens_lbl)
+        vb.addLayout(rel_sens_row)
+
+        vb.addWidget(_label("Ghost Tracking Grace Period (ms)", "label-field"))
+        ghost_row = QHBoxLayout()
+        self._ghost_dur = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._ghost_dur.setRange(0, 500)  # 0ms to 500ms
+        self._ghost_dur.setValue(int(self.settings.get("hand_persistence_seconds", 0.1) * 1000))
+        self._ghost_lbl = QLabel(f"{self._ghost_dur.value()}ms")
+        self._ghost_lbl.setObjectName("label-mono")
+        self._ghost_lbl.setFixedWidth(40)
+        self._ghost_dur.valueChanged.connect(lambda v: self._ghost_lbl.setText(f"{v}ms"))
+        ghost_row.addWidget(self._ghost_dur)
+        ghost_row.addWidget(self._ghost_lbl)
+        vb.addLayout(ghost_row)
+
         vb.addWidget(_label("Tracking FPS (Smoothness)", "label-field"))
         fps_row = QHBoxLayout()
         self._fps_slider = NoScrollSlider(Qt.Orientation.Horizontal)
@@ -228,6 +259,9 @@ class VisualSettingsPage(QWidget):
             "hand_point_h":           self._hh.value() / 100.0,
             "gesture_hold_seconds":   self._hold_dur.value() / 10.0,
             "tracking_fps":           self._fps_slider.value(),
+            "hand_relative_mode":     self._relative_mode.isChecked(),
+            "hand_relative_sensitivity": self._relative_sens.value() / 10.0,
+            "hand_persistence_seconds": self._ghost_dur.value() / 1000.0,
         })
         self.settings_changed.emit()
 
