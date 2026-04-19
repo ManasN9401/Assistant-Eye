@@ -292,9 +292,12 @@ class HandState:
         self.last_raw_pose = None
         self.pose_confirm_count = 0
         self.hold_gesture = Gesture.NONE
-        self.hold_start = 0.0
         self.hold_fired = False
         self.last_discrete_gesture = Gesture.NONE
+        
+        # Per-hand persistence
+        self.last_landmarks = None
+        self.last_seen_time = 0.0
 
     def reset(self):
         self.gesture_buffer.clear()
@@ -304,6 +307,8 @@ class HandState:
         self.hold_start = 0.0
         self.hold_fired = False
         self.last_discrete_gesture = Gesture.NONE
+        self.last_landmarks = None
+        self.last_seen_time = 0.0
 
 
 # ── Worker thread ─────────────────────────────────────────────────────────────
@@ -422,10 +427,11 @@ class HandTrackingWorker(QThread):
         try:
             options = HandLandmarkerOptions(
                 base_options=mp.tasks.BaseOptions(model_asset_path="models/hand_landmarker.task"),
-                running_mode=RunningMode.IMAGE,
+                running_mode=RunningMode.VIDEO,
                 num_hands=2,
-                min_hand_detection_confidence=0.7,
-                min_hand_presence_confidence=0.65,
+                min_hand_detection_confidence=0.55,
+                min_hand_presence_confidence=0.55,
+                min_tracking_confidence=0.55,
             )
             landmarker = HandLandmarker.create_from_options(options)
 
@@ -475,27 +481,51 @@ class HandTrackingWorker(QThread):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 100), 2, cv2.LINE_AA)
                 h, w, ch = frame_rgb.shape
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
-                results = landmarker.detect(image)
+                results = landmarker.detect_for_video(image, int(now * 1000))
 
-                # Persistence Logic: If hand is blinking out, use last valid results
-                is_ghost = False
-                if not results.hand_landmarks and self._last_results:
-                    if (now - self._last_results_time) < self._persistence_threshold:
-                        results = self._last_results
-                        is_ghost = True
+                # Identify currently detected sides
+                active_hands = {}
+                if results.hand_landmarks:
+                    for i, lm in enumerate(results.hand_landmarks):
+                        try:
+                            mp_side = results.handedness[i][0].category_name
+                            # Invert due to camera mirroring
+                            side = "Left" if mp_side == "Right" else "Right"
+                        except:
+                            side = "Right"
+                            
+                        # Prevent duplicate sides from destroying the second hand
+                        if side in active_hands:
+                            side = "Right" if side == "Left" else "Left"
+                            
+                        active_hands[side] = lm
                 
-                if results.hand_landmarks and not is_ghost:
-                    self._last_results = results
-                    self._last_results_time = now
+                # Update HandStates with detected hands
+                for side, lm in active_hands.items():
+                    state = self._hand_states[side]
+                    state.last_landmarks = lm
+                    state.last_seen_time = now
+                
+                # Check for ghosts for missing hands
+                processed_hands = []
+                for side, state in self._hand_states.items():
+                    lm = active_hands.get(side)
+                    is_ghost = False
+                    if not lm and state.last_landmarks is not None:
+                        if (now - state.last_seen_time) < self._persistence_threshold:
+                            lm = state.last_landmarks
+                            is_ghost = True
+                        else:
+                            state.reset()
+                    
+                    if lm:
+                        processed_hands.append((side, lm, is_ghost))
 
-                if not results.hand_landmarks:
+                if not processed_hands:
                     if self._was_pinching:
                         if self._scroll_tracker.end() and not self._tracking_paused:  # quick tap = click
                             self.click.emit(self._last_sx, self._last_sy)
                         self._was_pinching = False
-                    
-                    for state in self._hand_states.values():
-                        state.reset()
                     
                     self._oef_active = False
                     self._is_point_anchored = False
@@ -506,19 +536,13 @@ class HandTrackingWorker(QThread):
 
                 # Global Hand Gestures
                 global_gesture = None
-                if len(results.hand_landmarks) == 2:
-                    global_gesture = classify_gesture(results.hand_landmarks)
+                raw_lms = [h[1] for h in processed_hands if not h[2]] # Only use real hands for global gesture
+                if len(raw_lms) == 2:
+                    global_gesture = classify_gesture(raw_lms)
                     if global_gesture not in [Gesture.CLAP, Gesture.BOTH_PALMS]:
                         global_gesture = None
 
-                for i, hand in enumerate(results.hand_landmarks):
-                    try:
-                        mp_side = results.handedness[i][0].category_name
-                        # Invert due to camera mirroring
-                        side = "Left" if mp_side == "Right" else "Right"
-                    except:
-                        side = "Right"
-
+                for i, (side, hand, is_ghost) in enumerate(processed_hands):
                     state = self._hand_states.get(side)
                     if not state:
                         continue
@@ -562,10 +586,13 @@ class HandTrackingWorker(QThread):
 
                     # 5. Smooth coordinates (Primary tracking hand)
                     dt_proc = max(now - last_proc_time, 0.001)
-                    if not self._oef_active:
-                        self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
-                    sx = self._oef_x.filter(nx, dt_proc)
-                    sy = self._oef_y.filter(ny, dt_proc)
+                    if side == "Right":
+                        if not self._oef_active:
+                            self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
+                        sx = self._oef_x.filter(nx, dt_proc)
+                        sy = self._oef_y.filter(ny, dt_proc)
+                    else:
+                        sx, sy = nx, ny  # Fallback for left hand (not used for cursor)
 
                     if not is_ghost:
                         for lm in hand:
