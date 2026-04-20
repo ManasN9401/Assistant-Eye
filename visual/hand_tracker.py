@@ -429,9 +429,9 @@ class HandTrackingWorker(QThread):
                 base_options=mp.tasks.BaseOptions(model_asset_path="models/hand_landmarker.task"),
                 running_mode=RunningMode.VIDEO,
                 num_hands=2,
-                min_hand_detection_confidence=0.55,
-                min_hand_presence_confidence=0.55,
-                min_tracking_confidence=0.55,
+                min_hand_detection_confidence=0.50,
+                min_hand_presence_confidence=0.50,
+                min_tracking_confidence=0.50,
             )
             landmarker = HandLandmarker.create_from_options(options)
 
@@ -536,7 +536,8 @@ class HandTrackingWorker(QThread):
 
                 # Global Hand Gestures
                 global_gesture = None
-                raw_lms = [h[1] for h in processed_hands if not h[2]] # Only use real hands for global gesture
+                # Allow ghosts to participate in global gestures for stability (e.g. BOTH_PALMS)
+                raw_lms = [h[1] for h in processed_hands] 
                 if len(raw_lms) == 2:
                     global_gesture = classify_gesture(raw_lms)
                     if global_gesture not in [Gesture.CLAP, Gesture.BOTH_PALMS]:
@@ -608,36 +609,9 @@ class HandTrackingWorker(QThread):
                         # Optional: Draw a subtle indicator that ghost tracking is active
                         cv2.putText(frame_rgb, "[GHOST TRACKING]", (15, 40 + (i * 30)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
-
-                    if self._tracking_paused:
-                        cv2.putText(frame_rgb, "TRACKING PAUSED", (15, 80),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-
-                    if self._capture_name:
-                        cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                        cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
-
-                    # ── Draw Configured Active Display Zone ──────────────
-                    rect_x1, rect_y1 = int(zx * w), int(zy * h)
-                    rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
                     
-                    if self._calib_state == 1:
-                        cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
-                    elif self._calib_state == 2:
-                        cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(ix*w), int(iy*h)), (0, 165, 255), 2)
-                        cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
-                    else:
-                        cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
-                    
-                    if now - self._last_preview_time > 0.1:
-                        qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
-                        if not qimg.isNull():
-                            self.frame_processed.emit(qimg)
-                        self._last_preview_time = now
+                    # Store variables for global UI drawing outside loop
+                    last_ix, last_iy = ix, iy
 
                     # ── Right Hand Exclusives ──
                     if side == "Right":
@@ -737,7 +711,43 @@ class HandTrackingWorker(QThread):
                         else:
                             self._is_point_anchored = False
 
-                # ── Custom Pose Learning ────────────────────────────
+                # ── Global UI Drawing & Preview Emission (Outside Loop) ──
+                if self._tracking_paused:
+                    cv2.putText(frame_rgb, "TRACKING PAUSED", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+
+                if self._capture_name:
+                    cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+                    cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
+
+                # Fetch active zone for drawing
+                zx = self.settings.get("hand_point_x", 0.1)
+                zy = self.settings.get("hand_point_y", 0.1)
+                zw = self.settings.get("hand_point_w", 0.8)
+                zh = self.settings.get("hand_point_h", 0.8)
+                rect_x1, rect_y1 = int(zx * w), int(zy * h)
+                rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
+
+                if self._calib_state == 1:
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                elif self._calib_state == 2:
+                    cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(last_ix*w), int(last_iy*h)), (0, 165, 255), 2)
+                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                else:
+                    cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
+
+                # Emit final frame with ALL hands and ALL UI drawn
+                if now - self._last_preview_time > 0.1:
+                    qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                    if not qimg.isNull():
+                        self.frame_processed.emit(qimg)
+                    self._last_preview_time = now
+
+                # ── Custom Pose Learning ──────────
                 if self._capture_name and results.hand_landmarks:
                     self._capture_buffer.append(results.hand_landmarks[0])
                     if len(self._capture_buffer) >= 20:

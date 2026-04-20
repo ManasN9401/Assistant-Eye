@@ -9,14 +9,9 @@
     "action": "toggle_hand_tracking",
     "params": {}
   },
-  "fist_left": {
-    "enabled": false,
-    "action": "none",
-    "params": {}
-  },
-  "fist_right": {
+  "fist": {
     "enabled": true,
-    "action": "toggle_overlay",
+    "action": "close_overlay",
     "params": {}
   },
   "thumbs_up": {

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.settings import Settings
+from visual.gesture_manager import SystemGestureManager
 
 
 class NoScrollSlider(QSlider):
@@ -48,6 +49,20 @@ class VisualSettingsPage(QWidget):
 
     def __init__(self, settings: Settings):
         super().__init__()
+        self.settings = settings
+        self._gesture_manager = SystemGestureManager()
+        
+        self._available_actions = [
+            ("None", "none"),
+            ("Toggle Overlay", "toggle_overlay"),
+            ("Close Overlay", "close_overlay"),
+            ("Confirm Action", "confirm"),
+            ("Cancel / Dismiss", "cancel"),
+            ("Stop Speaking", "stop_speaking"),
+            ("Pause Hand Tracking", "toggle_hand_tracking"),
+        ]
+        
+        self._gesture_map_widgets = {} # gesture_name -> QComboBox
         self.settings = settings
         self._build()
 
@@ -194,7 +209,42 @@ class VisualSettingsPage(QWidget):
         vb.addWidget(calib_hand_btn)
 
 
-        # (Removed static gesture reference — now managed in Gesture Lab)
+        # ── System Gesture Mappings ──────────────────────────
+        vb.addWidget(_label("System Gesture Mappings", "card-title"))
+        vb.addWidget(_label("Choose what each built-in gesture does", "label-mono"))
+        
+        # List of system gestures to expose in UI
+        gestures_to_show = [
+            ("Dual Palms (Pause)", "both_palms"),
+            ("Clap", "clap"),
+            ("Fist (Dismiss)", "fist"),
+            ("Thumbs Up (Confirm)", "thumbs_up"),
+            ("Call Me (Launch App)", "call_me"),
+            ("Victory", "victory"),
+            ("Open Palm", "open_palm")
+        ]
+        
+        for display_name, internal_name in gestures_to_show:
+            row = QHBoxLayout()
+            row.addWidget(_label(display_name, "label-field"))
+            
+            combo = QComboBox()
+            for label, act_val in self._available_actions:
+                combo.addItem(label, act_val)
+            
+            # Load current mapping
+            mapping = self._gesture_manager.mappings.get(internal_name, {})
+            current_action = mapping.get("action", "none")
+            
+            # Find and set current index
+            for idx in range(combo.count()):
+                if combo.itemData(idx) == current_action:
+                    combo.setCurrentIndex(idx)
+                    break
+            
+            self._gesture_map_widgets[internal_name] = combo
+            row.addWidget(combo)
+            vb.addLayout(row)
 
         vb.addWidget(_divider())
 
@@ -263,6 +313,19 @@ class VisualSettingsPage(QWidget):
             "hand_relative_sensitivity": self._relative_sens.value() / 10.0,
             "hand_persistence_seconds": self._ghost_dur.value() / 1000.0,
         })
+        
+        # Save Gesture Mappings
+        for internal_name, combo in self._gesture_map_widgets.items():
+            action = combo.currentData()
+            # Preserve existing 'enabled' if missing, default to true if action isn't 'none'
+            existing = self._gesture_manager.mappings.get(internal_name, {})
+            self._gesture_manager.update_mapping(
+                internal_name,
+                enabled=(action != "none"),
+                action=action,
+                params=existing.get("params", {})
+            )
+        
         self.settings_changed.emit()
 
     def set_calibration_status(self, msg: str):

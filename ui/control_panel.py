@@ -618,6 +618,7 @@ class ControlPanel(QMainWindow):
                 lambda m: self._visual_page.set_calibration_status(f"Error: {m}")
             )
             self._visual_page.settings_changed.connect(self._on_settings_changed)
+            self._visual_page.settings_changed.connect(self.visual.reload_system_gestures)
             self.visual.frame_processed.connect(self._camera_page.update_frame)
 
             # Gesture Lab Integration
