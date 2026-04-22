@@ -637,6 +637,13 @@ class ControlPanel(QMainWindow):
         if not self.executor:
             return
         logger.info(f"[ControlPanel] Executing custom action: {action}")
+        
+        if action == "ai_command":
+            prompt = params.get("prompt", "").strip()
+            if prompt:
+                self._on_command(prompt)
+            return
+
         # Build a temporary function definition for the executor
         fn_def = {
             "name": "custom_gesture_action",

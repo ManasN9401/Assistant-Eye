@@ -21,6 +21,8 @@ high-level gesture events via Qt signals.
 from __future__ import annotations
 import os
 import time
+import math
+import random
 import logging
 from enum import Enum, auto
 from typing import Optional, List, Dict
@@ -298,6 +300,14 @@ class HandState:
         # Per-hand persistence
         self.last_landmarks = None
         self.last_seen_time = 0.0
+        
+        # Visual FX state
+        self.trail = deque(maxlen=20)   # Primary index trail
+        # Secondary trails for Thumb (4), Middle (12), Ring (16), Pinky (20)
+        self.multi_trails = {i: deque(maxlen=20) for i in [4, 12, 16, 20]}
+        self.skeleton_trail = deque(maxlen=12) # Full hand ghosts for Deep Overload
+        self.pulse_start = 0.0          # time a pulse was triggered (0 = none)
+        self.pulse_radius = 0           # current drawn radius
 
     def reset(self):
         self.gesture_buffer.clear()
@@ -309,6 +319,11 @@ class HandState:
         self.last_discrete_gesture = Gesture.NONE
         self.last_landmarks = None
         self.last_seen_time = 0.0
+        self.trail.clear()
+        for t in self.multi_trails.values(): t.clear()
+        self.skeleton_trail.clear()
+        self.pulse_start = 0.0
+        self.pulse_radius = 0
 
 
 # ── Worker thread ─────────────────────────────────────────────────────────────
@@ -375,9 +390,32 @@ class HandTrackingWorker(QThread):
         # Default 100ms (0.1s); can be tuned in UI
         self._persistence_threshold = float(self.settings.get("hand_persistence_seconds", 0.1))
         self._is_point_anchored = False
-
-    def trigger_calibration(self):
-        self._calib_state = 1
+        self._synergy_start_time = 0.0
+        self._synergy_trail = deque(maxlen=30)
+        self._last_synergy_dur = 0.0
+        self._explosion_start = 0.0
+        self._explosion_origin = (0, 0)
+        self._overload_end = 0.0
+        
+        # ── Spatial Sketch Mode ──
+        self._sketch_mode = False       # Toggled by Left Fist
+        self._drawing_active = False    # Controlled by Right Pinch
+        self._drawings = []             # List of {"color": (B,G,R), "pts": [(x,y), ...]}
+        self._active_stroke = []        # Points in current stroke
+        self._sketch_colors = [
+            ("Red", (255, 50, 50)),
+            ("Green", (50, 255, 50)),
+            ("Blue", (50, 50, 255)),
+            ("Yellow", (255, 255, 50)),
+            ("Purple", (255, 50, 255)),
+            ("Black", (20, 20, 20))
+        ]
+        self._color_idx = 0
+        self._last_toggle_time = 0.0    # Debounce for mode/palette
+        self._calib_state = 0
+        # Rendering Caches
+        self._v_shadow_cache = None     # (mask, res_w, res_h)
+        self._v_ripple_cache = None     # (mask, res_w, res_h)
 
     def learn_pose(self, name: str, action: str = "none", params: dict = None):
         """Triggers recording of the current hand shape."""
@@ -418,10 +456,14 @@ class HandTrackingWorker(QThread):
             self.error.emit(msg)
             return
 
+        # Set target FPS on camera hardware (driver level)
+        target_fps = int(self.settings.get("tracking_fps", 30))
+        cap.set(cv2.CAP_PROP_FPS, target_fps)
+
         # Log camera properties
         logger.debug(f"Camera {self.camera_index} properties:")
         logger.debug(f"  Resolution: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-        logger.debug(f"  FPS: {cap.get(cv2.CAP_PROP_FPS)}")
+        logger.debug(f"  Requested FPS: {target_fps} (Hardware Actual: {cap.get(cv2.CAP_PROP_FPS)})")
 
         landmarker = None
         try:
@@ -476,9 +518,20 @@ class HandTrackingWorker(QThread):
                 frame_rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
                 h, w, ch = frame_rgb.shape
                 
-                # Draw FPS on frame (User Request)
-                cv2.putText(frame_rgb, f"FPS: {int(fps_val)}", (w - 120, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 100), 2, cv2.LINE_AA)
+                # Draw FPS — frosted pill, top-right
+                fps_label = f"{int(fps_val):>3} fps"
+                _font, _sc, _th = cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1
+                (fw, fh), _bl = cv2.getTextSize(fps_label, _font, _sc, _th)
+                fx, fy = w - fw - 18, 12
+                # Frosted background via local overlay
+                hud_x1, hud_y1, hud_x2, hud_y2 = fx - 8, fy, fx + fw + 8, fy + fh + 10
+                sub = frame_rgb[hud_y1:hud_y2, hud_x1:hud_x2]
+                rect = sub.copy()
+                cv2.rectangle(rect, (0,0), (hud_x2-hud_x1, hud_y2-hud_y1), (18, 20, 25), -1)
+                cv2.addWeighted(rect, 0.5, sub, 0.5, 0, sub)
+                cv2.putText(frame_rgb, fps_label, (fx, fy + fh + 3),
+                            _font, _sc, (220, 230, 240), _th, cv2.LINE_AA)
+
                 h, w, ch = frame_rgb.shape
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
                 results = landmarker.detect_for_video(image, int(now * 1000))
@@ -511,8 +564,20 @@ class HandTrackingWorker(QThread):
                 for side, state in self._hand_states.items():
                     lm = active_hands.get(side)
                     is_ghost = False
+                    
                     if not lm and state.last_landmarks is not None:
-                        if (now - state.last_seen_time) < self._persistence_threshold:
+                        # Ghost candidate: check if any real hand is currently 'occupying' this space
+                        # (prevents handedness-flips from creating overlapping red/blue ghosts)
+                        too_close_to_real = False
+                        for r_side, r_lm in active_hands.items():
+                            # Check distance between palm (index 0) of ghost and real hands
+                            dist = ((r_lm[0].x - state.last_landmarks[0].x)**2 + 
+                                    (r_lm[0].y - state.last_landmarks[0].y)**2)**0.5
+                            if dist < 0.12: # suppress if within 12% of screen width
+                                too_close_to_real = True
+                                break
+
+                        if not too_close_to_real and (now - state.last_seen_time) < self._persistence_threshold:
                             lm = state.last_landmarks
                             is_ghost = True
                         else:
@@ -534,7 +599,61 @@ class HandTrackingWorker(QThread):
                     self.frame_processed.emit(qimg)
                     continue
 
-                # Global Hand Gestures
+                # ── Energy Synergy & Proximity ──
+                synergy_active = False
+                if len(processed_hands) == 2:
+                    # Check index tip proximity
+                    h1_lms = processed_hands[0][1]
+                    h2_lms = processed_hands[1][1]
+                    dist_tips = ((h1_lms[8].x - h2_lms[8].x)**2 + (h1_lms[8].y - h2_lms[8].y)**2)**0.5
+                    if dist_tips < 0.1: # 10% screen width
+                        # Block fusion if in post-explosion Overload, if in Sketch Mode, or if trails are disabled
+                        is_overload = now < self._overload_end
+                        fx_enabled = self.settings.get("hand_fx_trails", True)
+                        is_sketch = self._sketch_mode
+                        if not is_overload and not is_sketch and fx_enabled:
+                            synergy_active = True
+                
+                if synergy_active:
+                    if self._synergy_start_time == 0.0:
+                        self._synergy_start_time = now
+                else:
+                    self._synergy_start_time = 0.0
+                
+                synergy_dur = (now - self._synergy_start_time) if self._synergy_start_time > 0 else 0
+                
+                # Check for Release Explosion Trigger
+                if synergy_dur == 0 and self._last_synergy_dur > 5.0:
+                    if self._synergy_trail:
+                        lx, ly, _ = self._synergy_trail[-1]
+                        self._explosion_start = now
+                        self._explosion_origin = (lx, ly)
+                        self._overload_end = now + 9.0 # 3s Skel + 3s Tips + 3s Decay
+                self._last_synergy_dur = synergy_dur
+
+                # Growth: Logarithmic (starts at 0.5x, caps at 1.5x)
+                synergy_growth = 0.5 + min(math.log1p(synergy_dur * 0.8) * 0.6, 1.0) if synergy_dur > 0 else 1.0
+                # Pulse: slower, rhythmic beat
+                synergy_pulse = (math.sin(now * 6.0) + 1.0) / 2.0 if synergy_dur > 0 else 0.0
+
+                # Midpoint calculation for Fusion
+                fused_lms = None
+                if synergy_dur > 0 and len(processed_hands) == 2:
+                    fused_lms = []
+                    h1 = processed_hands[0][1]
+                    h2 = processed_hands[1][1]
+                    for idx in range(len(h1)):
+                        mx = (h1[idx].x + h2[idx].x) / 2
+                        my = (h1[idx].y + h2[idx].y) / 2
+                        fused_lms.append(type('MockLM', (object,), {'x': mx, 'y': my, 'z': 0.0}))
+                    
+                    # Track fusion trail (tip 8)
+                    self._synergy_trail.append((int(fused_lms[8].x * w), int(fused_lms[8].y * h), now))
+                else:
+                    self._synergy_trail.clear()
+
+                # (Keep global UI variables for later drawing)
+                last_ix, last_iy = 0.5, 0.5 
                 global_gesture = None
                 # Allow ghosts to participate in global gestures for stability (e.g. BOTH_PALMS)
                 raw_lms = [h[1] for h in processed_hands] 
@@ -566,6 +685,28 @@ class HandTrackingWorker(QThread):
                     if raw_gesture not in [Gesture.PINCH_START, Gesture.POINT] and pose_match:
                         final_raw = pose_match
                     
+                    # ── SKETCH MODE CONTROLS ──
+                    if self.settings.get("hand_fx_trails", True):
+                        # Toggle Mode: Left Fist
+                        if side == "Left" and final_raw == Gesture.FIST:
+                            if now - self._last_toggle_time > 1.2:
+                                self._sketch_mode = not self._sketch_mode
+                                self._last_toggle_time = now
+                                self._palette_open = False
+                                logger.info(f"Sketch Mode: {'ON' if self._sketch_mode else 'OFF'}")
+                        
+                        if self._sketch_mode:
+                            # Clear Workspace: Left Pinch
+                            if side == "Left" and final_raw == Gesture.PINCH_START:
+                                self._drawings.clear()
+                                self._active_stroke = []
+                            # Cycle Color: Left Victory
+                            if side == "Left" and final_raw == Gesture.VICTORY:
+                                if now - self._last_toggle_time > 0.8:
+                                    self._color_idx = (self._color_idx + 1) % len(self._sketch_colors)
+                                    self._last_toggle_time = now
+                                    logger.info(f"Sketch Color: {self._sketch_colors[self._color_idx][0]}")
+
                     # 4. Consensus Voting (Majority Vote over 5 frames)
                     state.gesture_buffer.append(final_raw)
                     if len(state.gesture_buffer) >= self._buffer_size_requirement:
@@ -582,8 +723,14 @@ class HandTrackingWorker(QThread):
                     ix = hand[8].x  # index tip x
                     iy = hand[8].y  # index tip y
 
-                    nx = max(0.0, min(1.0, (ix - zx) / max(0.001, zw)))
-                    ny = max(0.0, min(1.0, (iy - zy) / max(0.001, zh)))
+                    is_rel_mode = self.settings.get("hand_relative_mode", False)
+                    if is_rel_mode:
+                        # In Trackpad Mode, we use the FULL frame to calculate deltas
+                        nx, ny = ix, iy
+                    else:
+                        # In Absolute Mode, we map to the calibrated Active Zone
+                        nx = max(0.0, min(1.0, (ix - zx) / max(0.001, zw)))
+                        ny = max(0.0, min(1.0, (iy - zy) / max(0.001, zh)))
 
                     # 5. Smooth coordinates (Primary tracking hand)
                     dt_proc = max(now - last_proc_time, 0.001)
@@ -596,25 +743,361 @@ class HandTrackingWorker(QThread):
                         sx, sy = nx, ny  # Fallback for left hand (not used for cursor)
 
                     if not is_ghost:
-                        for lm in hand:
-                            jx, jy = int(lm.x * w), int(lm.y * h)
-                            # Color code: Right = Magenta, Left = Cyan
-                            color = (255, 100, 200) if side == "Right" else (255, 200, 100)
-                            cv2.circle(frame_rgb, (jx, jy), 4, color, -1)
+                        # ── Base landmarks (Transparent) ─────────────────────
+                        # HIDE individual landmarks if synergy is active (Fusion) OR during Overload
+                        is_overload = now < self._overload_end
+                        if synergy_dur <= 0 and not is_overload:
+                            if self._sketch_mode and side == "Right":
+                                base_color = self._sketch_colors[self._color_idx][1]
+                            else:
+                                base_color = (220, 55, 55) if side == "Right" else (55, 100, 220)
+                            overlay = frame_rgb.copy()
+                            for lm in hand:
+                                # Skip drawing landmarks if they are extremely close to the cursor/index to prevent "double markers"
+                                jx, jy = int(lm.x * w), int(lm.y * h)
+                                cv2.circle(overlay, (jx, jy), 5, tuple(int(c * 0.3) for c in base_color), -1, cv2.LINE_AA)
+                                cv2.circle(overlay, (jx, jy), 2, base_color, -1, cv2.LINE_AA)
+                            cv2.addWeighted(overlay, 0.4, frame_rgb, 0.6, 0, frame_rgb)
                         
+                        # ── PLASMA ORB V4 (Advanced Blending) ───────────────
+                        if synergy_dur > 0 and side == "Right" and fused_lms:
+                            avg_fx = sum(lm.x for lm in fused_lms) / len(fused_lms)
+                            avg_fy = sum(lm.y for lm in fused_lms) / len(fused_lms)
+                            cx, cy = int(avg_fx * w), int(avg_fy * h)
+                            
+                            radius = int(25 * synergy_growth + (synergy_pulse * 12))
+                            
+                            # 1. Create a Blur ROI for the soft atmosphere
+                            roi_size = int(radius * 4.5)
+                            rx1, ry1 = max(0, cx - roi_size // 2), max(0, cy - roi_size // 2)
+                            rx2, ry2 = min(w, cx + roi_size // 2), min(h, cy + roi_size // 2)
+                            
+                            if (rx2 - rx1) > 10 and (ry2 - ry1) > 10:
+                                orb_roi = frame_rgb[ry1:ry2, rx1:rx2].copy()
+                                glow_mask = np.zeros_like(orb_roi)
+                                local_cx, local_cy = cx - rx1, cy - ry1
+                                
+                                # Atmosphere (Deep Purple)
+                                cv2.circle(glow_mask, (local_cx, local_cy), int(radius * 2.0), (140, 40, 180), -1, cv2.LINE_AA)
+                                cv2.circle(glow_mask, (local_cx, local_cy), int(radius * 1.4), (200, 60, 240), -1, cv2.LINE_AA)
+                                
+                                # Soften the mask
+                                blur_k = int(radius * 0.8) | 1 # Must be odd
+                                glow_mask = cv2.GaussianBlur(glow_mask, (blur_k, blur_k), 0)
+                                cv2.addWeighted(orb_roi, 1.0, glow_mask, 0.6, 0, orb_roi)
+                                
+                                # 2. Hot Core (Layered white for "Bloom")
+                                cv2.circle(orb_roi, (local_cx, local_cy), int(radius * 0.7), (240, 150, 255), -1, cv2.LINE_AA)
+                                core_r = int(radius * (0.35 + synergy_pulse * 0.2))
+                                cv2.circle(orb_roi, (local_cx, local_cy), int(core_r * 1.4), (255, 200, 255), -1, cv2.LINE_AA)
+                                cv2.circle(orb_roi, (local_cx, local_cy), core_r, (255, 255, 255), -1, cv2.LINE_AA)
+                                
+                                # 3. Plasma Arcs (Lightning)
+                                # Generate 3-4 wiggly lines from core to edge
+                                num_arcs = 3 + int(synergy_pulse * 2)
+                                for _ in range(num_arcs):
+                                    arc_pts = []
+                                    angle = random.uniform(0, 2 * math.pi)
+                                    length = radius * random.uniform(1.2, 1.8)
+                                    segments = 5
+                                    for seg in range(segments + 1):
+                                        seg_r = (seg / segments) * length
+                                        # Add noise/wiggle
+                                        wiggle = radius * 0.2 * (1.0 - (seg/segments)) if seg < segments else 0
+                                        ax = local_cx + int(math.cos(angle) * seg_r) + random.randint(-int(wiggle+1), int(wiggle+1))
+                                        ay = local_cy + int(math.sin(angle) * seg_r) + random.randint(-int(wiggle+1), int(wiggle+1))
+                                        arc_pts.append([ax, ay])
+                                    
+                                    pts_np = np.array(arc_pts, np.int32).reshape((-1, 1, 2))
+                                    # Electric glow pass
+                                    cv2.polylines(orb_roi, [pts_np], False, (255, 220, 255), 2, cv2.LINE_AA)
+                                    cv2.polylines(orb_roi, [pts_np], False, (255, 255, 255), 1, cv2.LINE_AA)
+
+                                frame_rgb[ry1:ry2, rx1:rx2] = orb_roi
+
+                            # Global Screen Ripple (Enhanced Impact - Vignette Style)
+                            if synergy_dur > 3.5 and synergy_pulse > 0.85:
+                                # Optimized Ripple: Use cache if resolution matches
+                                if self._v_ripple_cache is None or self._v_ripple_cache[1] != w or self._v_ripple_cache[2] != h:
+                                    ripple_mask = np.zeros((h, w, 3), dtype=np.uint8)
+                                    cv2.rectangle(ripple_mask, (0,0), (w,h), (180, 160, 200), -1)
+                                    cutout_r = int(radius * 1.5)
+                                    cv2.circle(ripple_mask, (cx, cy), cutout_r, (0, 0, 0), -1, cv2.LINE_AA)
+                                    ripple_mask = cv2.GaussianBlur(ripple_mask, (w//5|1, h//5|1), 0)
+                                    self._v_ripple_cache = (ripple_mask, w, h)
+                                
+                                # Additive blend (Light vignette)
+                                cv2.addWeighted(frame_rgb, 1.0, self._v_ripple_cache[0], 0.4, 0, frame_rgb)
+
+                                shock_r = int(((now * 2.0) % 1.0) * w * 1.5)
+                                cv2.circle(frame_rgb, (cx, cy), shock_r, (255, 255, 255), 2, cv2.LINE_AA)
+
                         g_display = gesture if isinstance(gesture, str) else gesture.value
-                        cv2.putText(frame_rgb, f"{side}: {g_display}", (15, 40 + (i * 30)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
+                        label = f"{side[0].upper()}  {g_display}"
+                        l_font, l_sc, l_th = cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1
+                        (tw, th), baseline = cv2.getTextSize(label, l_font, l_sc, l_th)
+                        lx, ly = 18, 12
+                        if i > 0: ly += 30 # Offset subsequent hand labels vertically
+                        
+                        # Frosted background
+                        hx1, hy1, hx2, hy2 = lx - 8, ly, lx + tw + 8, ly + th + 10
+                        sub_l = frame_rgb[hy1:hy2, hx1:hx2]
+                        rect_l = sub_l.copy()
+                        cv2.rectangle(rect_l, (0,0), (hx2-hx1, hy2-hy1), (18, 20, 25), -1)
+                        cv2.addWeighted(rect_l, 0.5, sub_l, 0.5, 0, sub_l)
+                        
+                        cv2.putText(frame_rgb, label, (lx, ly + th + 3),
+                                    l_font, l_sc, (220, 230, 240), l_th, cv2.LINE_AA)
+
+                        tip_px = int(hand[8].x * w)
+                        tip_py = int(hand[8].y * h)
+
+                        # ── PARTICLE TRAILS ──────────────
+                        if self.settings.get("hand_fx_trails", True):
+                            # In Fusion mode, we use a separate centralized trail logic
+                            if synergy_dur > 0:
+                                # We only draw this ONCE when on the Right hand pass to avoid duplicates
+                                if side == "Right" and len(self._synergy_trail) > 1:
+                                    s_pts = list(self._synergy_trail)
+                                    overlay_t = frame_rgb.copy()
+                                    tr = (240, 80, 255)
+                                    t_scale = synergy_growth * (1.0 + synergy_pulse * 0.15)
+                                    brightness_mod = 0.8 + (synergy_pulse * 0.2)
+                                    
+                                    for ti in range(1, len(s_pts)):
+                                        age = now - s_pts[ti][2]
+                                        if age > 0.6: continue
+                                        alpha = max(0.0, 1.0 - age / 0.6)
+                                        p1, p2 = (s_pts[ti-1][0], s_pts[ti-1][1]), (s_pts[ti][0], s_pts[ti][1])
+                                        
+                                        # Passes on overlay
+                                        c1 = tuple(int(c * alpha * 0.25) for c in tr)
+                                        cv2.line(overlay_t, p1, p2, c1, max(1, int(20 * t_scale * alpha)), cv2.LINE_AA)
+                                        c2 = tuple(int(c * alpha * 0.60 * brightness_mod) for c in tr)
+                                        cv2.line(overlay_t, p1, p2, c2, max(1, int(10 * t_scale * alpha)), cv2.LINE_AA)
+                                        c3 = tuple(int(min(255, c * brightness_mod * 1.5)) for c in tr)
+                                        cv2.line(overlay_t, p1, p2, c3, max(1, int(4 * t_scale * alpha)), cv2.LINE_AA)
+                                        if synergy_pulse > 0.6:
+                                            cv2.line(overlay_t, p1, p2, (255, 200, 255), 1, cv2.LINE_AA)
+                                    
+                                    cv2.addWeighted(overlay_t, 0.5, frame_rgb, 0.5, 0, frame_rgb)
+                            else:
+                                state.trail.append((tip_px, tip_py, now))
+                                pts = list(state.trail)
+                                tr = (220, 55, 55) if side == "Right" else (55, 100, 220)
+                                
+                                # ── STANDARD TRAIL (SUPPRESSED DURING OVERLOAD) ──
+                                is_overload = now < self._overload_end
+                                if not is_overload:
+                                    overlay_st = frame_rgb.copy()
+                                    for ti in range(1, len(pts)):
+                                        age = now - pts[ti][2]
+                                        if age > 0.55: continue
+                                        alpha = max(0.0, 1.0 - age / 0.55)
+                                        p1, p2 = (pts[ti-1][0], pts[ti-1][1]), (pts[ti][0], pts[ti][1])
+                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha * 0.25) for c in tr), max(1, int(15 * alpha)), cv2.LINE_AA)
+                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha) for c in tr), max(1, int(3 * alpha)), cv2.LINE_AA)
+                                    cv2.addWeighted(overlay_st, 0.5, frame_rgb, 0.5, 0, frame_rgb)
+                                
+                                # ── POST-EXPLOSION OVERLOAD (Deep Lifecycle) ──────
+                                is_overload = now < self._overload_end
+                                if is_overload:
+                                    time_left = self._overload_end - now # 9.0 -> 0.0
+                                    overlay_ol = frame_rgb.copy()
+                                    target_tr = (220, 55, 55) if side == "Right" else (55, 100, 220)
+                                    purple_tr = (240, 80, 255)
+                                    
+                                    # PHASE 1: MASSIVE ENERGY VOLUME (Convex Hull + Blur)
+                                    if time_left > 5.5:
+                                        skel_pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand]
+                                        state.skeleton_trail.append((skel_pts, now))
+                                        p1_fade = min(1.0, max(0.0, (time_left - 5.5) / 1.0))
+                                        
+                                        ghosts = list(state.skeleton_trail)
+                                        # Dedicated overlay for smoky volume
+                                        vol_overlay = np.zeros_like(frame_rgb)
+                                        vibrant_p = (255, 0, 255)
+                                        
+                                        for gi in range(len(ghosts)):
+                                            g_pts, g_time = ghosts[gi]
+                                            g_age = now - g_time
+                                            if g_age > 0.4: continue
+                                            g_alpha = max(0.0, (1.0 - g_age / 0.4) * p1_fade)
+                                            
+                                            # 1. Massive Hull Volume (Brighter & More Opaque)
+                                            hull = cv2.convexHull(np.array(g_pts, np.int32))
+                                            # Increased opacity (0.5 instead of 0.2)
+                                            cv2.fillPoly(vol_overlay, [hull], tuple(int(c * g_alpha * 0.5) for c in vibrant_p))
+                                            cv2.polylines(vol_overlay, [hull], True, tuple(int(c * g_alpha * 0.7) for c in vibrant_p), 3, cv2.LINE_AA)
+                                            
+                                            # 2. Spectral Skeleton (Vibrant Detail)
+                                            connections = [
+                                                (0,1), (1,2), (2,3), (3,4), # Thumb
+                                                (0,5), (5,6), (6,7), (7,8), # Index
+                                                (0,9), (9,10), (10,11), (11,12), # Middle
+                                                (0,13), (13,14), (14,15), (15,16), # Ring
+                                                (0,17), (17,18), (18,19), (19,20), # Pinky
+                                                (5,9), (9,13), (13,17) # Knuckles
+                                            ]
+                                            # Consistent Vibrant Purple (vibrant_p)
+                                            for p1_i, p2_i in connections:
+                                                cv2.line(vol_overlay, g_pts[p1_i], g_pts[p2_i], tuple(int(c * g_alpha * 0.5) for c in vibrant_p), 2, cv2.LINE_AA)
+                                        
+                                        # Apply smoky blur to the volume
+                                        vol_overlay = cv2.GaussianBlur(vol_overlay, (21, 21), 0)
+                                        cv2.addWeighted(frame_rgb, 1.0, vol_overlay, 0.85, 0, frame_rgb)
+                                    
+                                    # PHASE 2 & 3: THICKER TIP TRAILS
+                                    if time_left < 6.5:
+                                        tip_fade = min(1.0, max(0.0, 1.0 - (time_left - 5.5) / 1.0))
+                                        morph = 1.0
+                                        if time_left < 3.0: morph = time_left / 3.0
+                                        
+                                        current_tr = (
+                                            int(240 * morph + target_tr[0] * (1-morph)),
+                                            int(80  * morph + target_tr[1] * (1-morph)),
+                                            int(255 * morph + target_tr[2] * (1-morph))
+                                        )
+                                        
+                                        # 5 Finger Tips (Thicker trails with dynamic decay)
+                                        for t_idx in [4, 8, 12, 16, 20]:
+                                            # Fade extra fingers away (4, 12, 16, 20)
+                                            extra_fade = 1.0
+                                            if t_idx != 8 and time_left < 3.0:
+                                                extra_fade = time_left / 3.0
+                                            
+                                            tip_lm = hand[t_idx]
+                                            t_px, t_py = int(tip_lm.x * w), int(tip_lm.y * h)
+                                            if t_idx == 8:
+                                                f_pts = list(state.trail)
+                                            else:
+                                                state.multi_trails[t_idx].append((t_px, t_py, now))
+                                                f_pts = list(state.multi_trails[t_idx])
+                                            
+                                            # Thickness Morph: 15px -> 3px
+                                            base_w = 15
+                                            if time_left < 3.0:
+                                                base_w = 3 + (12 * (time_left / 3.0))
+                                            
+                                            for ti in range(1, len(f_pts)):
+                                                p1, p2 = (f_pts[ti-1][0], f_pts[ti-1][1]), (f_pts[ti][0], f_pts[ti][1])
+                                                age = now - f_pts[ti][2]
+                                                if age > 0.45: continue
+                                                f_alpha = max(0.0, (1.0 - age / 0.45) * tip_fade * extra_fade)
+                                                if f_alpha < 0.02: continue
+                                                
+                                                # Thick Glowy Trails (Morphing thickness)
+                                                cv2.line(frame_rgb, p1, p2, current_tr, max(1, int(base_w * f_alpha)), cv2.LINE_AA)
+                                                # Only draw core if thickness permits
+                                                if base_w > 6:
+                                                    cv2.line(frame_rgb, p1, p2, (255, 255, 255), max(1, int(4 * (base_w/15.0) * f_alpha)), cv2.LINE_AA)
+                                        
+                                    # Phase out Global Overlay Weight: 0.45 -> 0.0 in final second
+                                    ol_weight = 0.45
+                                    if time_left < 1.0:
+                                        ol_weight = 0.45 * (time_left / 1.0)
+                                    if ol_weight > 0.01:
+                                        cv2.addWeighted(overlay_ol, ol_weight, frame_rgb, 1.0 - ol_weight, 0, frame_rgb)
+
+                        # ── FOCUS PULSE ───────────────
+                        if self.settings.get("hand_fx_pulse", True):
+                            # Trigger a pulse on pinch start (transition into PINCH_START)
+                            if gesture == Gesture.PINCH_START and state.pulse_start == 0.0:
+                                state.pulse_start = now
+                            elif gesture != Gesture.PINCH_START:
+                                state.pulse_start = 0.0
+
+                            if state.pulse_start > 0.0:
+                                elapsed = now - state.pulse_start
+                                max_r = 55
+                                r = int(max_r * min(elapsed / 0.5, 1.0))
+                                alpha_fade = max(0.0, 1.0 - elapsed / 0.5)
+                                pulse_col = (
+                                    int(255 * alpha_fade),
+                                    int(200 * alpha_fade),
+                                    int(80 * alpha_fade)
+                                )
+                                if r > 0 and alpha_fade > 0.05:
+                                    pinch_cx = int((hand[4].x + hand[8].x) / 2 * w)
+                                    pinch_cy = int((hand[4].y + hand[8].y) / 2 * h)
+                                    cv2.circle(frame_rgb, (pinch_cx, pinch_cy), r, pulse_col, 2, cv2.LINE_AA)
+
+                        # ── HOLO HUD ────────────────
+                        if self.settings.get("hand_fx_hud", False):
+                            # Bounding box around hand
+                            xs = [int(lm.x * w) for lm in hand]
+                            ys = [int(lm.y * h) for lm in hand]
+                            bx1, by1 = max(0, min(xs) - 18), max(0, min(ys) - 18)
+                            bx2, by2 = min(w, max(xs) + 18), min(h, max(ys) + 18)
+                            hud_col = (100, 255, 200)
+                            bracket = 16
+                            # TL
+                            cv2.line(frame_rgb, (bx1, by1), (bx1 + bracket, by1), hud_col, 2)
+                            cv2.line(frame_rgb, (bx1, by1), (bx1, by1 + bracket), hud_col, 2)
+                            # TR
+                            cv2.line(frame_rgb, (bx2, by1), (bx2 - bracket, by1), hud_col, 2)
+                            cv2.line(frame_rgb, (bx2, by1), (bx2, by1 + bracket), hud_col, 2)
+                            # BL
+                            cv2.line(frame_rgb, (bx1, by2), (bx1 + bracket, by2), hud_col, 2)
+                            cv2.line(frame_rgb, (bx1, by2), (bx1, by2 - bracket), hud_col, 2)
+                            # BR
+                            cv2.line(frame_rgb, (bx2, by2), (bx2 - bracket, by2), hud_col, 2)
+                            cv2.line(frame_rgb, (bx2, by2), (bx2, by2 - bracket), hud_col, 2)
+                            
+                            # Side label (gesture + mode)
+                            mode_label = "SKETCH" if self._sketch_mode else "STASIS"
+                            hud_text = f"{side[0]}: {g_display} [{mode_label}]"
+                            cv2.putText(frame_rgb, hud_text, (bx1, max(12, by1 - 6)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, hud_col, 1, cv2.LINE_AA)
+                                        
+                            # Left Hand Mode Hint
+                            if side == "Left":
+                                cv2.putText(frame_rgb, "LFist: Toggle Mode", (bx1, by2 + 16),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
+                                        
+                            # Sketch-Specific HUD (Contextual Hints on Right Hand)
+                            if self._sketch_mode and side == "Right":
+                                draw_color_name = self._sketch_colors[self._color_idx][0]
+                                draw_color_bgr = self._sketch_colors[self._color_idx][1]
+                                
+                                # Hints Label
+                                hints_label = "Tips: LVictory (Color) | LPinch (Clear)"
+                                cv2.putText(frame_rgb, hints_label, (bx1, by2 + 16),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
+                                # Color Label
+                                color_label = f"Color: {draw_color_name}"
+                                cv2.putText(frame_rgb, color_label, (bx1, by2 + 32),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, draw_color_bgr, 1, cv2.LINE_AA)
+
                     else:
-                        # Optional: Draw a subtle indicator that ghost tracking is active
-                        cv2.putText(frame_rgb, "[GHOST TRACKING]", (15, 40 + (i * 30)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+                        # Ghost tracking indicator
+                        cv2.putText(frame_rgb, f"{side[0]}  ghost", (14, 36 + i * 28),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (90, 100, 110), 1, cv2.LINE_AA)
                     
                     # Store variables for global UI drawing outside loop
                     last_ix, last_iy = ix, iy
 
                     # ── Right Hand Exclusives ──
                     if side == "Right":
+                        # ── SKETCH INTERACTION (PRECEDENCE) ──
+                        if self._sketch_mode:
+                            # 1. Drawing Engine
+                            if gesture == Gesture.PINCH_START:
+                                self._active_stroke.append((int(ix * w), int(iy * h)))
+                                self._drawing_active = True
+                                # Continue to skip other Right Hand actions
+                                self._last_sx, self._last_sy = sx, sy
+                                continue 
+                            elif self._drawing_active:
+                                # Commit stroke
+                                if len(self._active_stroke) > 2:
+                                    self._drawings.append({
+                                        "color": self._sketch_colors[self._color_idx][1],
+                                        "pts": self._active_stroke.copy()
+                                    })
+                                self._active_stroke = []
+                                self._drawing_active = False
+
                         # ── Selection / Drag (Middle Pinch) ──────────────────
                         if gesture == Gesture.MIDDLE_PINCH:
                             if not self._tracking_paused:
@@ -685,6 +1168,7 @@ class HandTrackingWorker(QThread):
                                         self.click.emit(ix, iy)
                             self._was_pinching = False
 
+
                         # ── Point ──────────
                         if gesture == Gesture.POINT:
                             self._last_point_time = now
@@ -712,15 +1196,91 @@ class HandTrackingWorker(QThread):
                             self._is_point_anchored = False
 
                 # ── Global UI Drawing & Preview Emission (Outside Loop) ──
+                
+                # ── SPATIAL SKETCH RENDERING ──
+                if self._sketch_mode:
+                    # 1. Render Persistent Strokes
+                    for stroke in self._drawings:
+                        if len(stroke["pts"]) > 1:
+                            pts_arr = np.array(stroke["pts"], np.int32)
+                            cv2.polylines(frame_rgb, [pts_arr], False, stroke["color"], 2, cv2.LINE_AA)
+                    
+                    # 2. Render Active Stroke
+                    if self._active_stroke and len(self._active_stroke) > 1:
+                        pts_arr = np.array(self._active_stroke, np.int32)
+                        cv2.polylines(frame_rgb, [pts_arr], False, self._sketch_colors[self._color_idx][1], 3, cv2.LINE_AA)
+
                 if self._tracking_paused:
-                    cv2.putText(frame_rgb, "TRACKING PAUSED", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+                    banner = "  TRACKING PAUSED  "
+                    _f, _s, _t = cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1
+                    (bw, bh), _ = cv2.getTextSize(banner, _f, _s, _t)
+                    bx, by = (w - bw) // 2, 12
+                    # Frosted background
+                    hx1, hy1, hx2, hy2 = bx - 10, by, bx + bw + 10, by + bh + 10
+                    sub_p = frame_rgb[hy1:hy2, hx1:hx2]
+                    rect_p = sub_p.copy()
+                    cv2.rectangle(rect_p, (0,0), (hx2-hx1, hy2-hy1), (22, 18, 14), -1)
+                    cv2.addWeighted(rect_p, 0.6, sub_p, 0.4, 0, sub_p)
+                    
+                    cv2.putText(frame_rgb, banner, (bx, by + bh + 4),
+                                _f, _s, (210, 150, 70), _t, cv2.LINE_AA)
+
+                # ── GLOBAL EXPLOSION RENDERING ───────────────────
+                if now < self._explosion_start + 0.6:
+                    ex_age = now - self._explosion_start
+                    ex_alpha = max(0.0, 1.0 - ex_age / 0.6)
+                    ex_cx, ex_cy = self._explosion_origin
+                    
+                    # Expanding shockwave rings
+                    num_rings = 4
+                    for r_i in range(num_rings):
+                        r_offset = r_i * 0.12
+                        if ex_age > r_offset:
+                            r_progress = (ex_age - r_offset) / 0.4
+                            if r_progress < 1.0:
+                                r_current = int(r_progress * w * 0.6)
+                                r_alpha = (1.0 - r_progress) * ex_alpha
+                                # Draw shockwave on overlay
+                                ex_overlay = frame_rgb.copy()
+                                cv2.circle(ex_overlay, (ex_cx, ex_cy), r_current, (255, 230, 255), 3 + r_i, cv2.LINE_AA)
+                                cv2.addWeighted(ex_overlay, r_alpha, frame_rgb, 1.0 - r_alpha, 0, frame_rgb)
+                    
+                    # Screen flash (Softer explosion)
+                    if ex_age < 0.15:
+                        flash_alpha = (1.0 - ex_age / 0.15) * 0.25
+                        screen_flash = frame_rgb.copy()
+                        cv2.rectangle(screen_flash, (0,0), (w,h), (255, 255, 255), -1)
+                        cv2.addWeighted(screen_flash, flash_alpha, frame_rgb, 1.0 - flash_alpha, 0, frame_rgb)
+
+                # ── GLOBAL OVERLOAD VIGNETTE ──
+                if now < self._overload_end:
+                    time_left = self._overload_end - now
+                    v_alpha = 1.0
+                    if time_left > 8.5: v_alpha = (9.0 - time_left) / 0.5
+                    elif time_left < 1.0: v_alpha = time_left / 1.0
+                    
+                    if v_alpha > 0.05:
+                        # Optimized Shadow: Use cache if resolution matches
+                        if self._v_shadow_cache is None or self._v_shadow_cache[1] != w or self._v_shadow_cache[2] != h:
+                            shadow_mask = np.zeros_like(frame_rgb)
+                            sh_thickness = int(w * 0.08)
+                            cv2.rectangle(shadow_mask, (0,0), (w,h), (40, 25, 50), sh_thickness)
+                            shadow_mask = cv2.GaussianBlur(shadow_mask, (w//4|1, h//4|1), 0)
+                            self._v_shadow_cache = (shadow_mask, w, h)
+                        
+                        # Subtraction intensity
+                        v_shadow_final = (self._v_shadow_cache[0] * (v_alpha * 0.5)).astype(np.uint8)
+                        frame_rgb = cv2.subtract(frame_rgb, v_shadow_final)
 
                 if self._capture_name:
-                    cv2.putText(frame_rgb, f"RECORDING: {self._capture_name}", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                    cv2.putText(frame_rgb, "HOLD STILL...", (15, 110),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1, cv2.LINE_AA)
+                    rec_label = f"  REC  {self._capture_name}  "
+                    (rw, rh), _ = cv2.getTextSize(rec_label, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
+                    rx = (w - rw) // 2
+                    cv2.rectangle(frame_rgb, (rx - 6, 52), (rx + rw + 6, 52 + rh + 10), (22, 12, 12), cv2.FILLED)
+                    cv2.putText(frame_rgb, rec_label, (rx, 52 + rh + 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (210, 90, 80), 1, cv2.LINE_AA)
+                    cv2.putText(frame_rgb, "hold still", (rx, 52 + rh + 22),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 80, 70), 1, cv2.LINE_AA)
 
                 # Fetch active zone for drawing
                 zx = self.settings.get("hand_point_x", 0.1)
@@ -731,17 +1291,25 @@ class HandTrackingWorker(QThread):
                 rect_x2, rect_y2 = int((zx + zw) * w), int((zy + zh) * h)
 
                 if self._calib_state == 1:
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the TOP-LEFT", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                    cv2.putText(frame_rgb, "pinch  →  top-left", (14, 82),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (160, 190, 210), 1, cv2.LINE_AA)
                 elif self._calib_state == 2:
-                    cv2.rectangle(frame_rgb, (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)), (int(last_ix*w), int(last_iy*h)), (0, 165, 255), 2)
-                    cv2.putText(frame_rgb, "Calibration: Pinch in the BOTTOM-RIGHT", (15, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2, cv2.LINE_AA)
+                    cv2.rectangle(frame_rgb,
+                                  (int(self._calib_tl[0]*w), int(self._calib_tl[1]*h)),
+                                  (int(last_ix*w), int(last_iy*h)),
+                                  (80, 130, 160), 1)
+                    cv2.putText(frame_rgb, "pinch  →  bottom-right", (14, 82),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (160, 190, 210), 1, cv2.LINE_AA)
                 else:
-                    cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (0, 255, 100), 2)
+                    # Subtle zone border — hide if in Sketch Mode OR Trackpad Mode
+                    is_rel = self.settings.get("hand_relative_mode", False)
+                    if not self._sketch_mode and not is_rel:
+                        cv2.rectangle(frame_rgb, (rect_x1, rect_y1), (rect_x2, rect_y2), (55, 65, 75), 1)
 
                 # Emit final frame with ALL hands and ALL UI drawn
-                if now - self._last_preview_time > 0.1:
+                # Throttle preview slightly lower than tracking target to avoid UI congestion
+                preview_throttle = 1.0 / (target_fps + 5) 
+                if now - self._last_preview_time >= preview_throttle:
                     qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                     if not qimg.isNull():
                         self.frame_processed.emit(qimg)
@@ -893,7 +1461,7 @@ class HandTracker(QObject):
             elif action == "toggle_hand_tracking":
                 if self._worker:
                     self._worker._tracking_paused = not self._worker._tracking_paused
-            elif action == "launch_app":
+            elif action in ("launch_app", "ai_command"):
                 self.custom_gesture.emit(gesture_str, action, params)
             
             # If we handled it as a system gesture, we're done

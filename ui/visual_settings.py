@@ -248,6 +248,27 @@ class VisualSettingsPage(QWidget):
 
         vb.addWidget(_divider())
 
+        # ── Special Effects ──────────────────────────────────
+        vb.addWidget(_label("Special Effects", "card-title"))
+        vb.addWidget(_label("Enhance the camera feed with visual flair", "label-mono"))
+
+        self._fx_trails = QCheckBox("Particle Trails  (index-finger glow trail)")
+        self._fx_trails.setChecked(self.settings.get("hand_fx_trails", True))
+        self._fx_trails.setToolTip("Draws a fading glow trail behind your index fingertip.")
+        vb.addWidget(self._fx_trails)
+
+        self._fx_pulse = QCheckBox("Focus Pulse  (click ripple effect)")
+        self._fx_pulse.setChecked(self.settings.get("hand_fx_pulse", True))
+        self._fx_pulse.setToolTip("Draws an expanding ring whenever you click or pinch.")
+        vb.addWidget(self._fx_pulse)
+
+        self._fx_hud = QCheckBox("Holo HUD  (holographic hand overlay)")
+        self._fx_hud.setChecked(self.settings.get("hand_fx_hud", False))
+        self._fx_hud.setToolTip("Draws stylised corner-brackets and status text around each hand.")
+        vb.addWidget(self._fx_hud)
+
+        vb.addWidget(_divider())
+
         # ── Eye tracking ──────────────────────────────────────
         vb.addWidget(_label("Eye Tracking", "card-title"))
 
@@ -312,6 +333,10 @@ class VisualSettingsPage(QWidget):
             "hand_relative_mode":     self._relative_mode.isChecked(),
             "hand_relative_sensitivity": self._relative_sens.value() / 10.0,
             "hand_persistence_seconds": self._ghost_dur.value() / 1000.0,
+            # Special effects
+            "hand_fx_trails": self._fx_trails.isChecked(),
+            "hand_fx_pulse":  self._fx_pulse.isChecked(),
+            "hand_fx_hud":    self._fx_hud.isChecked(),
         })
         
         # Save Gesture Mappings

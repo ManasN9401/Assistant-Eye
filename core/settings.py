@@ -20,7 +20,12 @@ DEFAULT_SETTINGS = {
     "window_height": 680,
     "active_site_url": "",
     "active_site_registry": "",
+    # Visual special effects
+    "hand_fx_trails": True,
+    "hand_fx_pulse": True,
+    "hand_fx_hud": False,
 }
+
 
 AI_PROVIDERS = {
     "openai": {

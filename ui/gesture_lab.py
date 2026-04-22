@@ -90,13 +90,22 @@ class GestureLabPage(QWidget):
         row1.addWidget(self._new_name)
         
         self._action_type = QComboBox()
-        self._action_type.addItems(["launch_app", "none"])
+        self._action_type.addItems(["launch_app", "ai_command", "none"])
         row1.addWidget(self._action_type)
         cv.addLayout(row1)
 
         self._new_params = QLineEdit()
-        self._new_params.setPlaceholderText("Target (e.g. spotify:, calc:, C:\\Program Files\\...)")
+        self._new_params.setPlaceholderText("Target (e.g. spotify:, C:\\path\\to\\app.exe)")
         cv.addWidget(self._new_params)
+
+        def _update_params_placeholder(text):
+            if text == "ai_command":
+                self._new_params.setPlaceholderText("AI Prompt (e.g. What is on my screen?)")
+            elif text == "launch_app":
+                self._new_params.setPlaceholderText("Target (e.g. spotify:, C:\\path\\to\\app.exe)")
+            else:
+                self._new_params.setPlaceholderText("")
+        self._action_type.currentTextChanged.connect(_update_params_placeholder)
 
         btn_row = QHBoxLayout()
         self._learn_btn = QPushButton("Learn Pose Signature")
@@ -220,19 +229,29 @@ class GestureLabPage(QWidget):
             row_layout.addWidget(enable_cb, 2)
             
             action_cb = QComboBox()
-            action_cb.addItems(["system_default", "launch_app", "none"])
+            action_cb.addItems(["system_default", "toggle_hand_tracking", "toggle_overlay",
+                                "close_overlay", "confirm", "cancel",
+                                "launch_app", "ai_command", "none"])
             current_action = data.get(g, {}).get("action", "system_default")
-            # Migration helper: some old configs might use specific names
-            if current_action in ["toggle_overlay", "close_overlay", "confirm", "cancel", "stop_speaking"]:
-                current_action = "system_default"
-            action_cb.setCurrentText(current_action)
+            # Migration: normalize old hardcoded names
+            if current_action not in action_cb.itemData(i) if False else True:
+                action_cb.setCurrentText(current_action) if current_action in [
+                    action_cb.itemText(i) for i in range(action_cb.count())
+                ] else action_cb.setCurrentText("system_default")
             row_layout.addWidget(action_cb, 2)
             
             params_edit = QLineEdit()
-            params_edit.setPlaceholderText("Param (e.g. notepad.exe)")
-            params_edit.setText(data.get(g, {}).get("params", {}).get("uri", ""))
-            params_edit.setVisible(current_action == "launch_app")
-            action_cb.currentTextChanged.connect(lambda text, p=params_edit: p.setVisible(text == "launch_app"))
+            params_edit.setPlaceholderText("Param (e.g. notepad.exe or AI prompt)")
+            params_edit.setText(data.get(g, {}).get("params", {}).get("uri",
+                                data.get(g, {}).get("params", {}).get("prompt", "")))
+            params_edit.setVisible(current_action in ["launch_app", "ai_command"])
+            def _toggle_vis(text, p=params_edit):
+                p.setVisible(text in ["launch_app", "ai_command"])
+                if text == "ai_command":
+                    p.setPlaceholderText("AI Prompt (e.g. What time is it?)")
+                else:
+                    p.setPlaceholderText("Param (e.g. notepad.exe)")
+            action_cb.currentTextChanged.connect(_toggle_vis)
             row_layout.addWidget(params_edit, 3)
             
             self._sys_layout.addLayout(row_layout)
@@ -248,11 +267,9 @@ class GestureLabPage(QWidget):
 
     def _on_save_system(self):
         new_data = {}
-        # We need to recover the 'correct' system_default action logic 
-        # because the internal mapper uses specific strings like 'toggle_overlay'
         defaults = {
             "clap": "toggle_overlay",
-            "both_palms": "toggle_overlay",
+            "both_palms": "toggle_hand_tracking",
             "fist": "close_overlay",
             "thumbs_up": "confirm",
             "call_me": "cancel",
@@ -265,11 +282,19 @@ class GestureLabPage(QWidget):
             action = row["action"].currentText()
             if action == "system_default":
                 action = defaults.get(g, "none")
+            
+            param_text = row["params"].text().strip()
+            if action == "launch_app":
+                params = {"uri": param_text}
+            elif action == "ai_command":
+                params = {"prompt": param_text}
+            else:
+                params = {}
                 
             new_data[g] = {
                 "enabled": row["enable"].isChecked(),
                 "action": action,
-                "params": {"uri": row["params"].text()} if action == "launch_app" else {}
+                "params": params,
             }
             
         try:
@@ -291,8 +316,9 @@ class GestureLabPage(QWidget):
                 data = json.load(f)
                 for name, d in data.items():
                     action = d.get("action", "none")
-                    target = d.get("params", {}).get("uri", "")
-                    item = QListWidgetItem(f"{name}  →  {action} ({target})")
+                    params = d.get("params", {})
+                    detail = params.get("uri") or params.get("prompt") or ""
+                    item = QListWidgetItem(f"{name}  →  {action}  {('(' + detail + ')') if detail else ''}")
                     self._pose_list.addItem(item)
         except Exception as e:
             logger.error(f"Error loading poses for UI: {e}")
@@ -312,22 +338,26 @@ class GestureLabPage(QWidget):
         # Start countdown
         self._learn_btn.setEnabled(False)
         self._countdown = 3
-        self._update_countdown(name, action, target)
+        
+        if action == "ai_command":
+            params = {"prompt": target}
+        else:
+            params = {"uri": target}
+        
+        self._update_countdown(name, action, params)
 
-    def _update_countdown(self, name, action, target):
+    def _update_countdown(self, name, action, params):
         if self._countdown > 0:
             self._status_lbl.setText(f"Get ready... {self._countdown}")
             self._status_lbl.setStyleSheet("color: #ffa500;")
             self._countdown -= 1
-            QTimer.singleShot(1000, lambda: self._update_countdown(name, action, target))
+            QTimer.singleShot(1000, lambda: self._update_countdown(name, action, params))
         else:
             self._status_lbl.setText("Recording... HOLD STILL!")
             self._status_lbl.setStyleSheet("color: #00ff00; font-weight: bold;")
             
-            # Request learn + metadata in one go
-            self.learn_pose_requested.emit(name, action, {"uri": target})
+            self.learn_pose_requested.emit(name, action, params)
             
-            # Reset UI after 2 seconds
             QTimer.singleShot(2000, self._on_learn_finished)
 
     def _on_learn_finished(self):
