@@ -1348,6 +1348,7 @@ class HandTrackingWorker(QThread):
             if landmarker:
                 landmarker.close()
             set_high_precision_timer(False)
+            self.settings.flush() # Force save any pending changes
             logger.info(f"Hand tracking stopped (camera {self.camera_index})")
 
     def stop(self):
@@ -1433,6 +1434,10 @@ class HandTracker(QObject):
             else:
                 self._worker.deleteLater()
             self._worker = None
+        
+        # Flush managers
+        self._sys_manager.flush()
+        self.settings.flush()
 
     @property
     def is_running(self) -> bool:
