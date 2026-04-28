@@ -1,24 +1,37 @@
-# EYE — AI Website Assistant Overlay
+# 👁️ EYE — AI Website Assistant Overlay
 
-> ⚠️ **Active Development** — EYE is currently in active development. Core features are functional, but APIs and interfaces may change as we work toward a stable release.
+<div align="center">
 
-A Python desktop assistant that connects to any website, responds to voice
-and text commands, and can control the browser with hands, eyes, and sign language.
+![License](https://img.shields.io/github/license/ManasN9401/Assistant-Eye)
+![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+![Status](https://img.shields.io/badge/status-active%20development-orange.svg)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
-EYE runs as an always-on-top overlay that floats above your browser, providing real-time AI assistance while you browse.
+**The futuristic, hands-free bridge between you and the web.**
+
+[Key Features](#key-features-at-a-glance) • [Quick Start](#quick-start) • [Project Structure](#project-structure) • [Gesture Lab](#gesture-lab--custom-signature-creator)
+
+</div>
 
 ---
 
-## Key Features at a Glance
+> [!IMPORTANT]
+> **Active Development** — EYE is currently in active development. Core features are functional, but APIs and interfaces may change as we work toward a stable release.
 
-- **12+ Built-in Hand Gestures** — Scroll, click, drag, and navigate with natural hand motions
-- **Custom Gesture Creator** — Design and save your own hand signatures to launch apps or trigger actions
-- **Eye Tracking** — Webcam-based gaze estimation with dwell-click (no specialist hardware needed)
-- **ASL Sign Recognition** — American Sign Language quick-actions (A, B, C, D, G, L, S, Y)
-- **Gesture Remapping** — Reconfigure system gestures to your preferred actions
-- **Voice Control** — Wake word detection, speech-to-text, and text-to-speech
-- **AI-Powered** — Pluggable support for OpenAI, Anthropic, and local Ollama models
-- **Browser Integration** — Chrome extension for DOM access and page-aware AI responses
+EYE is a powerful Python desktop assistant that transforms your browsing experience. It runs as an always-on-top, floating overlay that connects to any website, responding to voice, text, and visual cues. Control your browser with natural hand gestures, eye tracking, and even sign language.
+
+
+## ✨ Key Features at a Glance
+
+- **🖐️ 12+ Built-in Hand Gestures** — Scroll, click, drag, and navigate with natural hand motions
+- **🎨 Custom Gesture Creator** — Design and save your own hand signatures to launch apps or trigger actions
+- **👁️ Eye Tracking** — Webcam-based gaze estimation with dwell-click (no specialist hardware needed)
+- **🤟 ASL Sign Recognition** — American Sign Language quick-actions (A, B, C, D, G, L, S, Y)
+- **⚙️ Gesture Remapping** — Reconfigure system gestures to your preferred actions
+- **🎙️ Voice Control** — Wake word detection, speech-to-text, and text-to-speech
+- **🤖 AI-Powered** — Pluggable support for OpenAI, Anthropic, and local Ollama models
+- **🌐 Browser Integration** — Chrome extension for DOM access and page-aware AI responses
 
 ---
 
@@ -34,13 +47,28 @@ EYE combines several components to create an immersive hands-free browsing exper
 
 ---
 
-## Quick start
+## 🚀 Quick Start
+
+Get up and running in minutes:
 
 ```bash
-python setup.py          # installs all deps, checks permissions, creates .env
-cd test_website && python -m http.server 5500   # serve the test site
-python main.py           # launch EYE
+# 1. Install dependencies and setup environment
+python setup.py
+
+# 2. Start the local test environment (optional)
+cd test_website && python -m http.server 5500
+
+# 3. Launch EYE
+python main.py
 ```
+
+## 🛠️ Built With
+
+*   **Core UI:** [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) - Professional-grade desktop interface
+*   **Computer Vision:** [MediaPipe](https://mediapipe.dev/) & [OpenCV](https://opencv.org/) - Real-time gesture and eye tracking
+*   **AI Engines:** OpenAI GPT-4, Anthropic Claude, and local Ollama support
+*   **Web Automation:** [Playwright](https://playwright.dev/) - Reliable browser interaction
+*   **Voice:** Vosk & Porcupine for wake words, Faster-Whisper for STT
 
 ## Browser Extension
 
@@ -390,7 +418,7 @@ sudo apt install libxcb-cursor0
 
 ---
 
-## Development Status
+## 📈 Development Status
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -406,7 +434,10 @@ sudo apt install libxcb-cursor0
 | Custom Gestures | ✅ Functional | Vector-based pose matching with hysteresis |
 | System Gesture Remap | ✅ Functional | Toggle/remap built-in gestures via JSON |
 
-### What's Next
+> [!TIP]
+> Features marked as 🧪 **Experimental** are functional but may have lower accuracy or require specific lighting/camera conditions. We are actively working on improving these models.
+
+### 🗺️ What's Next
 
 - [ ] Multi-browser support (Firefox, Edge)
 - [ ] Improved eye tracking calibration

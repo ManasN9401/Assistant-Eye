@@ -50,7 +50,7 @@ class Settings:
         self.config_dir = Path.home() / ".aria-assistant"
         self.config_file = self.config_dir / "settings.json"
         self._data: dict = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock() # Re-entrant lock prevents deadlocks
         self._save_timer: threading.Timer = None
         self._dirty = False
         self.load()

@@ -38,29 +38,22 @@ class CursorController:
         self._screen_w, self._screen_h = self._get_screen_size()
 
     def _get_screen_size(self) -> tuple[int, int]:
-        # On Windows use ctypes — most reliable, works before QApplication settles
-        if self._system == "Windows":
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                user32.SetProcessDPIAware()  # Ensure we get physical pixels, not scaled
-                w = user32.GetSystemMetrics(0)  # SM_CXSCREEN
-                h = user32.GetSystemMetrics(1)  # SM_CYSCREEN
-                if w > 0 and h > 0:
-                    logger.debug(f"Screen size from ctypes: {w}x{h}")
-                    return w, h
-            except Exception as e:
-                logger.warning(f"ctypes screen size failed: {e}")
-        # Fallback: PyQt (works on Linux/macOS)
+        # Since QApplication is already created in main.py, we can use it safely.
+        # This is more stable than calling user32.GetSystemMetrics directly.
         try:
             from PyQt6.QtWidgets import QApplication
-            screen = QApplication.primaryScreen()
-            if screen:
-                geo = screen.geometry()
-                logger.debug(f"Screen size from PyQt: {geo.width()}x{geo.height()}")
-                return geo.width(), geo.height()
-        except Exception:
-            pass
+            app = QApplication.instance()
+            if app:
+                screen = app.primaryScreen()
+                if screen:
+                    geo = screen.geometry()
+                    w, h = geo.width(), geo.height()
+                    if w > 0 and h > 0:
+                        logger.debug(f"Screen size from PyQt: {w}x{h}")
+                        return w, h
+        except Exception as e:
+            logger.warning(f"PyQt screen size detection failed: {e}")
+
         logger.warning("Using fallback screen size 1920x1080")
         return 1920, 1080
 
@@ -190,14 +183,21 @@ class VisualCoordinator(QObject):
 
         # Initialize logging
         setup_logging("eye_tracking_debug.log")
-        logger.info("VisualCoordinator initialized")
+        logger.info("VisualCoordinator: setup_logging done")
         self._is_dragging = False
 
         self.settings = settings
+        logger.info("VisualCoordinator: Initializing CursorController...")
         self._cursor  = CursorController()
+        logger.info("VisualCoordinator: CursorController ready")
 
+        logger.info("VisualCoordinator: Initializing HandTracker...")
         self.hand_tracker = HandTracker(settings, self)
+        logger.info("VisualCoordinator: HandTracker ready")
+
+        logger.info("VisualCoordinator: Initializing EyeTracker...")
         self.eye_tracker  = EyeTracker(settings, self)
+        logger.info("VisualCoordinator: EyeTracker ready")
 
         # Gaze cursor throttle — don't move cursor every frame
         self._last_cursor_move = 0.0

@@ -536,22 +536,30 @@ class HandTrackingWorker(QThread):
                 image = Image(image_format=ImageFormat.SRGB, data=frame_rgb)
                 results = landmarker.detect_for_video(image, int(now * 1000))
 
-                # Identify currently detected sides
+                # Identify currently detected sides with spatial heuristic for stability
                 active_hands = {}
                 if results.hand_landmarks:
+                    raw_dets = []
                     for i, lm in enumerate(results.hand_landmarks):
                         try:
                             mp_side = results.handedness[i][0].category_name
-                            # Invert due to camera mirroring
-                            side = "Left" if mp_side == "Right" else "Right"
+                            # Calculate average X to determine screen position
+                            avg_x = sum(pt.x for pt in lm) / len(lm)
+                            raw_dets.append({"lm": lm, "mp_side": mp_side, "avg_x": avg_x})
                         except:
-                            side = "Right"
-                            
-                        # Prevent duplicate sides from destroying the second hand
-                        if side in active_hands:
-                            side = "Right" if side == "Left" else "Left"
-                            
-                        active_hands[side] = lm
+                            continue
+                    
+                    if len(raw_dets) == 2:
+                        # Sort by X: leftmost hand (smaller X) is "Left", rightmost is "Right"
+                        # This assumes mirror flip 1 was applied (standard for self-view)
+                        raw_dets.sort(key=lambda d: d["avg_x"])
+                        active_hands["Left"] = raw_dets[0]["lm"]
+                        active_hands["Right"] = raw_dets[1]["lm"]
+                    elif len(raw_dets) == 1:
+                        # Single hand: trust MediaPipe + Mirror Inversion
+                        d = raw_dets[0]
+                        side = "Left" if d["mp_side"] == "Right" else "Right"
+                        active_hands[side] = d["lm"]
                 
                 # Update HandStates with detected hands
                 for side, lm in active_hands.items():
@@ -746,7 +754,7 @@ class HandTrackingWorker(QThread):
                         # ── Base landmarks (Transparent) ─────────────────────
                         # HIDE individual landmarks if synergy is active (Fusion) OR during Overload
                         is_overload = now < self._overload_end
-                        if synergy_dur <= 0 and not is_overload:
+                        if not synergy_active and not is_overload:
                             if self._sketch_mode and side == "Right":
                                 base_color = self._sketch_colors[self._color_idx][1]
                             else:
@@ -759,61 +767,59 @@ class HandTrackingWorker(QThread):
                                 cv2.circle(overlay, (jx, jy), 2, base_color, -1, cv2.LINE_AA)
                             cv2.addWeighted(overlay, 0.4, frame_rgb, 0.6, 0, frame_rgb)
                         
-                        # ── PLASMA ORB V4 (Advanced Blending) ───────────────
-                        if synergy_dur > 0 and side == "Right" and fused_lms:
-                            avg_fx = sum(lm.x for lm in fused_lms) / len(fused_lms)
-                            avg_fy = sum(lm.y for lm in fused_lms) / len(fused_lms)
+                        # ── PLASMA ORB V4 (Working Version) ──────────────────
+                        if synergy_dur > 0 and side == "Right":
+                            # Use fusion midpoint for centering if available
+                            if fused_lms:
+                                avg_fx = sum(lm.x for lm in fused_lms) / len(fused_lms)
+                                avg_fy = sum(lm.y for lm in fused_lms) / len(fused_lms)
+                            else:
+                                avg_fx = sum(lm.x for lm in hand) / len(hand)
+                                avg_fy = sum(lm.y for lm in hand) / len(hand)
                             cx, cy = int(avg_fx * w), int(avg_fy * h)
                             
-                            radius = int(25 * synergy_growth + (synergy_pulse * 12))
+                            # Pulse effect: modulate radius and intensity
+                            pulse_mod = 1.0 + (synergy_pulse * 0.15)
+                            radius = int(35 * synergy_growth * pulse_mod)
                             
-                            # 1. Create a Blur ROI for the soft atmosphere
-                            roi_size = int(radius * 4.5)
-                            rx1, ry1 = max(0, cx - roi_size // 2), max(0, cy - roi_size // 2)
-                            rx2, ry2 = min(w, cx + roi_size // 2), min(h, cy + roi_size // 2)
+                            # Simple layered glow with pulsating opacity (more opaque towards center)
+                            for r, opacity in [(radius*2, 0.15 * pulse_mod), (radius*1.5, 0.4 * pulse_mod), (radius, 0.7 * pulse_mod)]:
+                                overlay = frame_rgb.copy()
+                                cv2.circle(overlay, (cx, cy), int(r), (180, 50, 255), -1, cv2.LINE_AA)
+                                cv2.addWeighted(overlay, min(1.0, opacity), frame_rgb, 1.0 - min(1.0, opacity), 0, frame_rgb)
                             
-                            if (rx2 - rx1) > 10 and (ry2 - ry1) > 10:
-                                orb_roi = frame_rgb[ry1:ry2, rx1:rx2].copy()
-                                glow_mask = np.zeros_like(orb_roi)
-                                local_cx, local_cy = cx - rx1, cy - ry1
-                                
-                                # Atmosphere (Deep Purple)
-                                cv2.circle(glow_mask, (local_cx, local_cy), int(radius * 2.0), (140, 40, 180), -1, cv2.LINE_AA)
-                                cv2.circle(glow_mask, (local_cx, local_cy), int(radius * 1.4), (200, 60, 240), -1, cv2.LINE_AA)
-                                
-                                # Soften the mask
-                                blur_k = int(radius * 0.8) | 1 # Must be odd
-                                glow_mask = cv2.GaussianBlur(glow_mask, (blur_k, blur_k), 0)
-                                cv2.addWeighted(orb_roi, 1.0, glow_mask, 0.6, 0, orb_roi)
-                                
-                                # 2. Hot Core (Layered white for "Bloom")
-                                cv2.circle(orb_roi, (local_cx, local_cy), int(radius * 0.7), (240, 150, 255), -1, cv2.LINE_AA)
-                                core_r = int(radius * (0.35 + synergy_pulse * 0.2))
-                                cv2.circle(orb_roi, (local_cx, local_cy), int(core_r * 1.4), (255, 200, 255), -1, cv2.LINE_AA)
-                                cv2.circle(orb_roi, (local_cx, local_cy), core_r, (255, 255, 255), -1, cv2.LINE_AA)
-                                
-                                # 3. Plasma Arcs (Lightning)
-                                # Generate 3-4 wiggly lines from core to edge
-                                num_arcs = 3 + int(synergy_pulse * 2)
-                                for _ in range(num_arcs):
-                                    arc_pts = []
-                                    angle = random.uniform(0, 2 * math.pi)
-                                    length = radius * random.uniform(1.2, 1.8)
-                                    segments = 5
-                                    for seg in range(segments + 1):
-                                        seg_r = (seg / segments) * length
-                                        # Add noise/wiggle
-                                        wiggle = radius * 0.2 * (1.0 - (seg/segments)) if seg < segments else 0
-                                        ax = local_cx + int(math.cos(angle) * seg_r) + random.randint(-int(wiggle+1), int(wiggle+1))
-                                        ay = local_cy + int(math.sin(angle) * seg_r) + random.randint(-int(wiggle+1), int(wiggle+1))
-                                        arc_pts.append([ax, ay])
-                                    
-                                    pts_np = np.array(arc_pts, np.int32).reshape((-1, 1, 2))
-                                    # Electric glow pass
-                                    cv2.polylines(orb_roi, [pts_np], False, (255, 220, 255), 2, cv2.LINE_AA)
-                                    cv2.polylines(orb_roi, [pts_np], False, (255, 255, 255), 1, cv2.LINE_AA)
+                            # Core
+                            cv2.circle(frame_rgb, (cx, cy), int(radius * 0.4), (255, 255, 255), -1, cv2.LINE_AA)
+                            
+                            # E. Energy Sparks (Particles)
+                            if synergy_dur > 2.0:
+                                for _ in range(3):
+                                    s_angle = random.uniform(0, 2 * math.pi)
+                                    s_dist = radius * random.uniform(0.5, 2.5)
+                                    spx = cx + int(math.cos(s_angle) * s_dist)
+                                    spy = cy + int(math.sin(s_angle) * s_dist)
+                                    if 0 <= spx < w and 0 <= spy < h:
+                                        cv2.circle(frame_rgb, (spx, spy), random.randint(1, 2), (255, 240, 255), -1, cv2.LINE_AA)
 
-                                frame_rgb[ry1:ry2, rx1:rx2] = orb_roi
+                            # F. Lightning / Electrical Discharge
+                            if synergy_dur > 1.0:
+                                for _ in range(2):
+                                    # Draw jagged lines from center outwards or connecting hands
+                                    l_angle = random.uniform(0, 2 * math.pi)
+                                    l_dist = radius * random.uniform(1.2, 3.2)
+                                    
+                                    # Jagged path logic
+                                    steps = 4
+                                    last_p = (cx, cy)
+                                    for s in range(1, steps + 1):
+                                        f = s / steps
+                                        next_p = (
+                                            cx + int(math.cos(l_angle) * l_dist * f) + random.randint(-12, 12),
+                                            cy + int(math.sin(l_angle) * l_dist * f) + random.randint(-12, 12)
+                                        )
+                                        # Draw core and glow for lightning
+                                        cv2.line(frame_rgb, last_p, next_p, (255, 200, 255), 1, cv2.LINE_AA)
+                                        last_p = next_p
 
                             # Global Screen Ripple (Enhanced Impact - Vignette Style)
                             if synergy_dur > 3.5 and synergy_pulse > 0.85:
@@ -1000,7 +1006,7 @@ class HandTrackingWorker(QThread):
                                         cv2.addWeighted(overlay_ol, ol_weight, frame_rgb, 1.0 - ol_weight, 0, frame_rgb)
 
                         # ── FOCUS PULSE ───────────────
-                        if self.settings.get("hand_fx_pulse", True):
+                        if self.settings.get("hand_fx_pulse", True) and not synergy_active:
                             # Trigger a pulse on pinch start (transition into PINCH_START)
                             if gesture == Gesture.PINCH_START and state.pulse_start == 0.0:
                                 state.pulse_start = now
@@ -1023,7 +1029,7 @@ class HandTrackingWorker(QThread):
                                     cv2.circle(frame_rgb, (pinch_cx, pinch_cy), r, pulse_col, 2, cv2.LINE_AA)
 
                         # ── HOLO HUD ────────────────
-                        if self.settings.get("hand_fx_hud", False):
+                        if self.settings.get("hand_fx_hud", False) and not synergy_active:
                             # Bounding box around hand
                             xs = [int(lm.x * w) for lm in hand]
                             ys = [int(lm.y * h) for lm in hand]

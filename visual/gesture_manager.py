@@ -11,7 +11,7 @@ class SystemGestureManager:
     def __init__(self, config_path: str = "core/system_gestures.json"):
         self.config_path = config_path
         self.mappings = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._save_timer = None
         self._dirty = False
         self.load()

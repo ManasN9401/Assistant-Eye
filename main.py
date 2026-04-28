@@ -52,6 +52,12 @@ def _tray_icon(color="#e8a020") -> QIcon:
 
 
 def main():
+    import ctypes
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
     logging.basicConfig(
         level=logging.DEBUG,
         format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
@@ -61,13 +67,17 @@ def main():
     log = logging.getLogger("main")
 
     app = QApplication(sys.argv)
+    print("[INIT] QApplication created")
     app.setApplicationName("EYE")
     app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(DARK_QSS)
     log.debug("Starting EYE assistant application")
 
+    print("[INIT] Loading Settings...")
     settings = Settings()
+    print("[INIT] Settings loaded")
     engine   = AIEngine(settings)
+    print("[INIT] AI Engine ready")
     registry = FunctionRegistry(settings)
     
     registries = registry.list_registries()
@@ -78,6 +88,7 @@ def main():
     log.debug("Core initialized: settings=%s, registry=%s", settings, registry)
 
     # ── Browser bridge ────────────────────────────────────────────────────────
+    print("[INIT] Starting Browser Bridge...")
     browser_bridge = BrowserBridgeThread(settings)
     browser_bridge.start()
     log.debug("Browser bridge thread started")
@@ -85,19 +96,24 @@ def main():
     executor   = ActionExecutor(settings, engine, playwright, browser_bridge)
     log.debug("Action executor created")
 
+    print("[INIT] Starting Voice...")
     voice = VoiceCoordinator(settings, engine, registry)
     log.debug("Voice coordinator initialized")
 
+    print("[INIT] Starting Visual...")
     visual = VisualCoordinator(settings)
 
+    print("[INIT] Creating UI...")
     overlay   = Overlay(settings, engine, registry)
     calib_win = CalibrationOverlay()
     panel     = ControlPanel(settings, registry, engine, voice,
                              browser_bridge, executor, visual)
+    print("[INIT] UI Created")
     hotkeys = HotkeyManager(settings)
     hotkeys.overlay_triggered.connect(overlay.toggle)
     hotkeys.listen_triggered.connect(voice.trigger_listen)
     hotkeys.error.connect(lambda m: print(f"[hotkey] {m}"))
+    print("[INIT] Starting Hotkeys...")
     hotkeys.start()
     # Re-register when settings change
     panel._settings_page.settings_changed.connect(hotkeys.update_hotkeys)
