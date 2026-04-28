@@ -1,4 +1,4 @@
-# 👁️ EYE — AI Website Assistant Overlay
+# EYE — AI Website Assistant Overlay
 
 <div align="center">
 
@@ -24,14 +24,14 @@ EYE is a powerful Python desktop assistant that transforms your browsing experie
 
 ## ✨ Key Features at a Glance
 
-- **🖐️ 12+ Built-in Hand Gestures** — Scroll, click, drag, and navigate with natural hand motions
-- **🎨 Custom Gesture Creator** — Design and save your own hand signatures to launch apps or trigger actions
-- **👁️ Eye Tracking** — Webcam-based gaze estimation with dwell-click (no specialist hardware needed)
-- **🤟 ASL Sign Recognition** — American Sign Language quick-actions (A, B, C, D, G, L, S, Y)
-- **⚙️ Gesture Remapping** — Reconfigure system gestures to your preferred actions
-- **🎙️ Voice Control** — Wake word detection, speech-to-text, and text-to-speech
-- **🤖 AI-Powered** — Pluggable support for OpenAI, Anthropic, and local Ollama models
-- **🌐 Browser Integration** — Chrome extension for DOM access and page-aware AI responses
+- ** 12+ Built-in Hand Gestures** — Scroll, click, drag, and navigate with natural hand motions
+- ** Custom Gesture Creator** — Design and save your own hand signatures to launch apps or trigger actions
+- ** Eye Tracking** — Webcam-based gaze estimation with dwell-click (no specialist hardware needed)
+- ** ASL Sign Recognition** — American Sign Language quick-actions (A, B, C, D, G, L, S, Y)
+- ** Gesture Remapping** — Reconfigure system gestures to your preferred actions
+- ** Voice Control** — Wake word detection, speech-to-text, and text-to-speech
+- ** AI-Powered** — Pluggable support for OpenAI, Anthropic, and local Ollama models
+- ** Browser Integration** — Chrome extension for DOM access and page-aware AI responses
 
 ---
 
