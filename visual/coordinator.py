@@ -25,6 +25,7 @@ from visual.hand_tracker import HandTracker
 from visual.eye_tracker import EyeTracker
 from visual.logging_config import setup_logging
 from core.function_registry import FunctionRegistry
+from ui.sign_ui import SignLanguageOverlay
 
 # Initialize logging on module import
 logger = logging.getLogger(__name__)
@@ -169,6 +170,7 @@ class VisualCoordinator(QObject):
     # Custom Pose Actions
     execute_custom_action = pyqtSignal(str, dict) # action_name, params
     frame_processed      = pyqtSignal(object) # QImage feed from cameras
+    sign_language_active_changed = pyqtSignal(bool)
 
     # Status
     error  = pyqtSignal(str)
@@ -206,6 +208,9 @@ class VisualCoordinator(QObject):
         self.sign_language_active = False
         self._current_camera = self.settings.get("visual_camera", 0)
         self._cursor_lock = QMutex()
+        
+        # Sign Language UI
+        self._sign_overlay = None
 
         self._wire()
 
@@ -245,6 +250,11 @@ class VisualCoordinator(QObject):
         self.eye_tracker.calibration_progress.connect(self.calibration_progress)
         self.eye_tracker.calibration_complete.connect(self.calibration_complete)
         self.eye_tracker.error.connect(self.error)
+
+        # Sign Language → UI
+        self.hand_tracker.sign_update.connect(self._on_sign_update)
+        self.hand_tracker.hand_pos_update.connect(self._on_hand_pos_update)
+        self.hand_tracker.mode_changed.connect(self._on_mode_changed)
 
     # ── Throttled handlers ────────────────────────────────────────────────────
 
@@ -308,6 +318,31 @@ class VisualCoordinator(QObject):
         self.status.emit(f"Pose detected: {name}")
         self.execute_custom_action.emit(action, params)
 
+    def _on_sign_update(self, full, word, letter):
+        if self._sign_overlay:
+            self._sign_overlay.update_translation(full, word, letter)
+
+    def _on_hand_pos_update(self, x, y):
+        # We no longer use a separate desktop-wide hand label overlay.
+        # Hand position updates are still processed if needed by other components.
+        pass
+
+    def _on_mode_changed(self, new_mode: str):
+        logger.info(f"VisualCoordinator: Mode changed to {new_mode}")
+        self.status.emit(f"Mode: {new_mode}")
+        
+        # Handle Sign Language Overlay visibility
+        if new_mode == "SYMBOL":
+            if not self._sign_overlay:
+                self._sign_overlay = SignLanguageOverlay()
+            self._sign_overlay.show()
+            self.sign_language_active = True
+            self.sign_language_active_changed.emit(True)
+        else:
+            if self._sign_overlay: self._sign_overlay.hide()
+            self.sign_language_active = False
+            self.sign_language_active_changed.emit(False)
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start_hand_tracking(self, camera: int = 0):
@@ -326,6 +361,29 @@ class VisualCoordinator(QObject):
     def stop_eye_tracking(self):
         self.eye_tracker.stop()
         self.status.emit("Eye tracking stopped")
+
+    def start_sign_language(self, camera: int = 0):
+        self.sign_language_active = True
+        self.start_hand_tracking(camera)
+        self.hand_tracker.set_symbol_mode(True)
+        
+        if not self._sign_overlay:
+            self._sign_overlay = SignLanguageOverlay()
+        if not self._hand_label:
+            self._hand_label = HandLabelOverlay()
+            
+        self._sign_overlay.show()
+        self._hand_label.show()
+        self.sign_language_active_changed.emit(True)
+        self.status.emit("Sign language translation active")
+
+    def stop_sign_language(self):
+        self.sign_language_active = False
+        self.hand_tracker.set_symbol_mode(False)
+        if self._sign_overlay: self._sign_overlay.hide()
+        if self._hand_label: self._hand_label.hide()
+        self.sign_language_active_changed.emit(False)
+        self.status.emit("Sign language translation stopped")
 
     def start_calibration(self):
         self.eye_tracker.start_calibration()

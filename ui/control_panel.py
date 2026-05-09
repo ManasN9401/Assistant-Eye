@@ -598,6 +598,10 @@ class ControlPanel(QMainWindow):
                 lambda on: self.visual.start_eye_tracking(self.settings.get("visual_camera", 0)) if on
                 else self.visual.stop_eye_tracking()
             )
+            self._visual_page.toggle_sign_language.connect(
+                lambda on: self.visual.start_sign_language(self.settings.get("visual_camera", 0)) if on
+                else self.visual.stop_sign_language()
+            )
             self._visual_page.start_calibration.connect(self.visual.start_calibration)
             self._visual_page.start_hand_calibration.connect(self.visual.start_hand_calibration)
             self._visual_page.advance_calibration.connect(self.visual.advance_calibration)
@@ -630,6 +634,7 @@ class ControlPanel(QMainWindow):
             # Execute actions from coordinator
             self.visual.execute_custom_action.connect(self._on_custom_action)
             self.visual.status.connect(self._sb_label.setText)
+            self.visual.sign_language_active_changed.connect(self._visual_page.set_sign_language_toggle_state)
 
         self._switch_page(0)
 

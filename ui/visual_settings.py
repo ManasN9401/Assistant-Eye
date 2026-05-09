@@ -45,6 +45,7 @@ class VisualSettingsPage(QWidget):
     start_calibration    = pyqtSignal()
     start_hand_calibration = pyqtSignal()
     advance_calibration  = pyqtSignal()
+    toggle_sign_language = pyqtSignal(bool)
     settings_changed     = pyqtSignal()
 
     def __init__(self, settings: Settings):
@@ -111,6 +112,11 @@ class VisualSettingsPage(QWidget):
         self._hand_enable.setChecked(self.settings.get("hand_tracking_active", False))
         self._hand_enable.toggled.connect(self.toggle_hand_tracking)
         vb.addWidget(self._hand_enable)
+
+        self._sign_enable = QCheckBox("Enable Sign Language Translation (Symbol Mode)")
+        self._sign_enable.setChecked(self.settings.get("sign_language_active", False))
+        self._sign_enable.toggled.connect(self.toggle_sign_language)
+        vb.addWidget(self._sign_enable)
 
         vb.addWidget(_label("Scroll sensitivity", "label-field"))
         sens_row = QHBoxLayout()
@@ -322,6 +328,7 @@ class VisualSettingsPage(QWidget):
             "visual_camera":          self._cam_index.currentData(),
             "hand_scroll_sensitivity": self._scroll_sens.value(),
             "hand_tracking_active":   self._hand_enable.isChecked(),
+            "sign_language_active":   self._sign_enable.isChecked(),
             "eye_tracking_active":    self._eye_enable.isChecked(),
             "eye_dwell_sec":          self._dwell.value() / 10.0,
             "hand_point_x":           self._hx.value() / 100.0,
@@ -355,3 +362,9 @@ class VisualSettingsPage(QWidget):
 
     def set_calibration_status(self, msg: str):
         self._calib_status.setText(msg)
+
+    def set_sign_language_toggle_state(self, on: bool):
+        """Programmatically update the sign language toggle state without triggering signals."""
+        self._sign_enable.blockSignals(True)
+        self._sign_enable.setChecked(on)
+        self._sign_enable.blockSignals(False)

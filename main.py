@@ -185,6 +185,7 @@ def main():
     visual.action_stop_speaking.connect(voice.tts.stop)
     visual.action_confirm.connect(lambda: voice.send_text("yes, confirm"))
     visual.action_cancel.connect(lambda: voice.send_text("cancel"))
+    visual.sign_language_active_changed.connect(overlay.set_sign_language_mode)
 
     # Settings refresh
     panel._settings_page.settings_changed.connect(overlay.refresh_name)

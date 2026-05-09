@@ -35,6 +35,7 @@ from PyQt6.QtGui import QImage
 from visual.pose_matcher import PoseMatcher
 from visual.gesture_manager import SystemGestureManager
 from visual.platform_win import disable_efficiency_mode, set_high_precision_timer, set_high_priority
+from visual.sign_language import ASLRecognizer, SignTranslator
 
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,12 @@ class HandTrackingWorker(QThread):
     middle_pinch_rel_move = pyqtSignal(float, float, bool)
     # (dx, dy) - for trackpad-style relative movement
     cursor_rel_move = pyqtSignal(float, float)
+    # (full_translation, current_word, current_letter)
+    sign_update = pyqtSignal(str, str, str)
+    # (x_norm, y_norm) - for hand label positioning
+    hand_pos_update = pyqtSignal(float, float)
+    # (new_mode) — STASIS, SKETCH, SYMBOL
+    mode_changed = pyqtSignal(str)
 
     def __init__(self, settings, camera_index: int = 0, parent=None):
         super().__init__(parent)
@@ -397,8 +404,16 @@ class HandTrackingWorker(QThread):
         self._explosion_origin = (0, 0)
         self._overload_end = 0.0
         
-        # ── Spatial Sketch Mode ──
-        self._sketch_mode = False       # Toggled by Left Fist
+        # ── Tracking Modes ──
+        # Modes: STASIS, SKETCH, SYMBOL
+        self._tracking_mode = "STASIS"
+        self._sketch_mode = False       # For backward compatibility with some drawing logic
+        self._symbol_mode = False       # For backward compatibility with some recognition logic
+        
+        # Mode Cycling: Left Fist Hold (1.0s)
+        self._fist_hold_start = 0.0
+        self._fist_hold_triggered = False
+
         self._drawing_active = False    # Controlled by Right Pinch
         self._drawings = []             # List of {"color": (B,G,R), "pts": [(x,y), ...]}
         self._active_stroke = []        # Points in current stroke
@@ -416,6 +431,9 @@ class HandTrackingWorker(QThread):
         # Rendering Caches
         self._v_shadow_cache = None     # (mask, res_w, res_h)
         self._v_ripple_cache = None     # (mask, res_w, res_h)
+
+        # ── Sign Language / Symbol Mode ──
+        self._sign_translator = SignTranslator()
 
     def learn_pose(self, name: str, action: str = "none", params: dict = None):
         """Triggers recording of the current hand shape."""
@@ -615,11 +633,12 @@ class HandTrackingWorker(QThread):
                     h2_lms = processed_hands[1][1]
                     dist_tips = ((h1_lms[8].x - h2_lms[8].x)**2 + (h1_lms[8].y - h2_lms[8].y)**2)**0.5
                     if dist_tips < 0.1: # 10% screen width
-                        # Block fusion if in post-explosion Overload, if in Sketch Mode, or if trails are disabled
+                        # Block fusion if in post-explosion Overload, or if NOT in STASIS mode, or if trails are disabled
                         is_overload = now < self._overload_end
                         fx_enabled = self.settings.get("hand_fx_trails", True)
-                        is_sketch = self._sketch_mode
-                        if not is_overload and not is_sketch and fx_enabled:
+                        is_stasis = (self._tracking_mode == "STASIS")
+                        
+                        if not is_overload and is_stasis and fx_enabled:
                             synergy_active = True
                 
                 if synergy_active:
@@ -670,6 +689,11 @@ class HandTrackingWorker(QThread):
                     if global_gesture not in [Gesture.CLAP, Gesture.BOTH_PALMS]:
                         global_gesture = None
 
+                # ── Mode Cycling Reset if Left hand lost ──
+                if not any(side == "Left" for side, _, _ in processed_hands):
+                    self._fist_hold_start = 0.0
+                    self._fist_hold_triggered = False
+
                 for i, (side, hand, is_ghost) in enumerate(processed_hands):
                     state = self._hand_states.get(side)
                     if not state:
@@ -693,23 +717,99 @@ class HandTrackingWorker(QThread):
                     if raw_gesture not in [Gesture.PINCH_START, Gesture.POINT] and pose_match:
                         final_raw = pose_match
                     
-                    # ── SKETCH MODE CONTROLS ──
-                    if self.settings.get("hand_fx_trails", True):
-                        # Toggle Mode: Left Fist
-                        if side == "Left" and final_raw == Gesture.FIST:
-                            if now - self._last_toggle_time > 1.2:
-                                self._sketch_mode = not self._sketch_mode
-                                self._last_toggle_time = now
-                                self._palette_open = False
-                                logger.info(f"Sketch Mode: {'ON' if self._sketch_mode else 'OFF'}")
+                    # ── TRACKING MODE CYCLING ──
+                    if side == "Left" and final_raw == Gesture.FIST:
+                        if self._fist_hold_start == 0.0:
+                            self._fist_hold_start = now
                         
-                        if self._sketch_mode:
+                        if not self._fist_hold_triggered and (now - self._fist_hold_start >= 1.0):
+                            # Cycle: STASIS -> SKETCH -> SYMBOL -> STASIS
+                            if self._tracking_mode == "STASIS":
+                                self._tracking_mode = "SKETCH"
+                            elif self._tracking_mode == "SKETCH":
+                                self._tracking_mode = "SYMBOL"
+                            else:
+                                self._tracking_mode = "STASIS"
+                            
+                            # Sync legacy flags for compatibility
+                            self._sketch_mode = (self._tracking_mode == "SKETCH")
+                            self._symbol_mode = (self._tracking_mode == "SYMBOL")
+                            
+                            self._fist_hold_triggered = True
+                            self.mode_changed.emit(self._tracking_mode)
+                            logger.info(f"HandTracker: Mode cycled to {self._tracking_mode}")
+                    elif side == "Left":
+                        self._fist_hold_start = 0.0
+                        self._fist_hold_triggered = False
+
+                    # ── MODE-SPECIFIC CONTROLS & HUD ──
+                    if self._tracking_mode == "SYMBOL":
+                        # Recognition
+                        letter = ASLRecognizer.recognize(hand)
+                        res = self._sign_translator.update(letter)
+                        
+                        # Only emit updates from the dominant hand to avoid text flickering
+                        # (Right hand has priority, or first hand if single)
+                        is_dominant = (side == "Right") or (len(processed_hands) == 1)
+                        if is_dominant:
+                            # Pass tip position for movement tracking (e.g. for letter 'Z')
+                            tip_pos = (hand[8].x, hand[8].y)
+                            res = self._sign_translator.update(letter, tip_pos)
+                            self.sign_update.emit(res["full"], res["word"], res.get("letter", letter or ""))
+                            self.hand_pos_update.emit(hand[8].x, hand[8].y)
+                        else:
+                            # Just update the translator state without emitting (to track movement on both hands if needed)
+                            res = self._sign_translator.update(letter, (hand[8].x, hand[8].y))
+
+                        # Visual feedback (Iron Man HUD style Scouter)
+                        # ONLY if the global Rectangular HUD is OFF
+                        if not self.settings.get("hand_fx_hud", False):
+                            hx, hy = int(hand[8].x * w), int(hand[8].y * h)
+                            box_w, box_h = 42, 42
+                            bx1, by1 = hx + 20, hy - 60
+                            bx2, by2 = bx1 + box_w, by1 + box_h
+                            
+                            # Bounds check
+                            bx1, bx2 = max(0, min(bx1, w-box_w)), max(box_w, min(bx2, w))
+                            by1, by2 = max(0, min(by1, h-box_h)), max(box_h, min(by2, h))
+
+                            # Draw Scouter UI
+                            if bx1 < bx2 and by1 < by2:
+                                # 1. Background (More transparent)
+                                sub_rect = frame_rgb[by1:by2, bx1:bx2]
+                                bg_rect = np.full_like(sub_rect, (30, 32, 35), dtype=np.uint8)
+                                frame_rgb[by1:by2, bx1:bx2] = cv2.addWeighted(sub_rect, 0.85, bg_rect, 0.15, 0)
+                                
+                                # 2. Minimal border & brackets
+                                cv2.rectangle(frame_rgb, (bx1, by1), (bx2, by2), (90, 95, 105), 1, cv2.LINE_AA)
+                                brk = 8
+                                cv2.line(frame_rgb, (bx1, by1), (bx1+brk, by1), (200, 205, 215), 1)
+                                cv2.line(frame_rgb, (bx1, by1), (bx1, by1+brk), (200, 205, 215), 1)
+                                cv2.line(frame_rgb, (bx2, by2), (bx2-brk, by2), (200, 205, 215), 1)
+                                cv2.line(frame_rgb, (bx2, by2), (bx2, by2-brk), (200, 205, 215), 1)
+
+                                # 3. Text (Letter) if recognized
+                                if letter:
+                                    t_size = cv2.getTextSize(letter, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)[0]
+                                    tx = bx1 + (box_w - t_size[0]) // 2
+                                    ty = by1 + (box_h + t_size[1]) // 2
+                                    # Matching Holo HUD Green (100, 255, 200)
+                                    cv2.putText(frame_rgb, letter, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 255, 200), 2, cv2.LINE_AA)
+                                else:
+                                    # Scan indicator
+                                    cv2.putText(frame_rgb, "...", (bx1+12, by1+28), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 125, 135), 1, cv2.LINE_AA)
+                                
+                                # 4. Connector
+                                cv2.line(frame_rgb, (hx, hy), (bx1 if hx < bx1 else bx2, by2), (90, 95, 105), 1, cv2.LINE_AA)
+
+                    elif self._tracking_mode == "SKETCH" and self.settings.get("hand_fx_trails", True):
+                        if side == "Left":
                             # Clear Workspace: Left Pinch
-                            if side == "Left" and final_raw == Gesture.PINCH_START:
+                            if final_raw == Gesture.PINCH_START:
                                 self._drawings.clear()
                                 self._active_stroke = []
                             # Cycle Color: Left Victory
-                            if side == "Left" and final_raw == Gesture.VICTORY:
+                            if final_raw == Gesture.VICTORY:
                                 if now - self._last_toggle_time > 0.8:
                                     self._color_idx = (self._color_idx + 1) % len(self._sketch_colors)
                                     self._last_toggle_time = now
@@ -1050,19 +1150,39 @@ class HandTrackingWorker(QThread):
                             cv2.line(frame_rgb, (bx2, by2), (bx2 - bracket, by2), hud_col, 2)
                             cv2.line(frame_rgb, (bx2, by2), (bx2, by2 - bracket), hud_col, 2)
                             
+                            # SYMBOL Mode Integration
+                            if self._tracking_mode == "SYMBOL":
+                                letter = ASLRecognizer.recognize(hand)
+                                if letter:
+                                    # Scouter-box style container on the side
+                                    s_box_w, s_box_h = 42, 42
+                                    sbx1, sby1 = bx2 + 5, (by1 + by2 - s_box_h) // 2
+                                    sbx2, sby2 = sbx1 + s_box_w, sby1 + s_box_h
+                                    
+                                    # Background
+                                    if sbx2 < w:
+                                        overlay = frame_rgb.copy()
+                                        cv2.rectangle(overlay, (sbx1, sby1), (sbx2, sby2), (30, 32, 35), -1)
+                                        cv2.addWeighted(overlay, 0.15, frame_rgb, 0.85, 0, frame_rgb)
+                                        cv2.rectangle(frame_rgb, (sbx1, sby1), (sbx2, sby2), (90, 95, 105), 1, cv2.LINE_AA)
+                                        
+                                        # Letter (Matching Holo HUD Green)
+                                        t_sz = cv2.getTextSize(letter, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)[0]
+                                        cv2.putText(frame_rgb, letter, (sbx1 + (s_box_w - t_sz[0]) // 2, sby1 + (s_box_h + t_sz[1]) // 2),
+                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 255, 200), 2, cv2.LINE_AA)
+                            
                             # Side label (gesture + mode)
-                            mode_label = "SKETCH" if self._sketch_mode else "STASIS"
-                            hud_text = f"{side[0]}: {g_display} [{mode_label}]"
+                            hud_text = f"{side[0]}: {g_display} [{self._tracking_mode}]"
                             cv2.putText(frame_rgb, hud_text, (bx1, max(12, by1 - 6)),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, hud_col, 1, cv2.LINE_AA)
                                         
-                            # Left Hand Mode Hint
+                            # Mode Cycling Hint
                             if side == "Left":
-                                cv2.putText(frame_rgb, "LFist: Toggle Mode", (bx1, by2 + 16),
+                                cv2.putText(frame_rgb, "LFist (1s): Cycle Mode", (bx1, by2 + 16),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
                                         
                             # Sketch-Specific HUD (Contextual Hints on Right Hand)
-                            if self._sketch_mode and side == "Right":
+                            if self._sketch_mode and side == "Right" and not self._symbol_mode:
                                 draw_color_name = self._sketch_colors[self._color_idx][0]
                                 draw_color_bgr = self._sketch_colors[self._color_idx][1]
                                 
@@ -1083,10 +1203,10 @@ class HandTrackingWorker(QThread):
                     # Store variables for global UI drawing outside loop
                     last_ix, last_iy = ix, iy
 
-                    # ── Right Hand Exclusives ──
+                    # ── Right Hand Exclusives (Restricted by Mode) ──
                     if side == "Right":
-                        # ── SKETCH INTERACTION (PRECEDENCE) ──
-                        if self._sketch_mode:
+                        # ── SKETCH INTERACTION (Only in SKETCH Mode) ──
+                        if self._tracking_mode == "SKETCH":
                             # 1. Drawing Engine
                             if gesture == Gesture.PINCH_START:
                                 self._active_stroke.append((int(ix * w), int(iy * h)))
@@ -1104,102 +1224,104 @@ class HandTrackingWorker(QThread):
                                 self._active_stroke = []
                                 self._drawing_active = False
 
-                        # ── Selection / Drag (Middle Pinch) ──────────────────
-                        if gesture == Gesture.MIDDLE_PINCH:
-                            if not self._tracking_paused:
+                        # ── OS Interaction (Only in STASIS Mode) ──────────────────
+                        if self._tracking_mode == "STASIS":
+                            # ── Selection / Drag (Middle Pinch) ──────────────────
+                            if gesture == Gesture.MIDDLE_PINCH:
+                                if not self._tracking_paused:
+                                    if self.settings.get("hand_relative_mode", False):
+                                        if not self._is_point_anchored:
+                                            self._is_point_anchored = True
+                                        else:
+                                            sens = float(self.settings.get("hand_relative_sensitivity", 2.0))
+                                            dx = (sx - self._last_sx) * sens
+                                            dy = (sy - self._last_sy) * sens
+                                            self.middle_pinch_rel_move.emit(dx, dy, True)
+                                    else:
+                                        self._is_point_anchored = False
+                                        self.middle_pinch_move.emit(sx, sy, True) 
+
+                                self._last_sx, self._last_sy = sx, sy
+                                self._was_middle_pinching = True
+                                continue
+
+                            if self._was_middle_pinching:
+                                if not self._tracking_paused:
+                                    if self.settings.get("hand_relative_mode", False):
+                                        self.middle_pinch_rel_move.emit(0, 0, False)
+                                    else:
+                                        self.middle_pinch_move.emit(self._last_sx, self._last_sy, False)
+                                self._was_middle_pinching = False
+                                self._is_point_anchored = False # Reset anchor on release
+
+                            # ── Calibration ──────────────────────────
+                            if self._calib_state > 0 and gesture == Gesture.PINCH_START:
+                                if self._calib_state == 1:
+                                    self._calib_tl = (ix, iy)
+                                    self._calib_state = 2
+                                    time.sleep(0.5)
+                                elif self._calib_state == 2:
+                                    tl_x, tl_y = self._calib_tl
+                                    bx, by = max(tl_x, ix), max(tl_y, iy)
+                                    tx, ty = min(tl_x, ix), min(tl_y, iy)
+                                    self.settings.update({
+                                        "hand_point_x": tx, "hand_point_y": ty,
+                                        "hand_point_w": max(0.1, bx - tx), "hand_point_h": max(0.1, by - ty)
+                                    })
+                                    self._calib_state = 0
+                                    time.sleep(0.5)
+                                continue
+
+                            # ── Scroll / Click ──────────────────────────────
+                            if gesture == Gesture.PINCH_START:
+                                pinch_y = (hand[4].y + hand[8].y) / 2
+                                if not self._was_pinching:
+                                    self._scroll_tracker.begin(pinch_y)
+                                    self._was_pinching = True
+                                else:
+                                    live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 2500))
+                                    delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
+                                    if self._scroll_tracker.total_moved > 15:
+                                        if abs(delta) > 0.5 and not self._tracking_paused: 
+                                            self.scroll.emit(delta)
+                                self._last_sx, self._last_sy = sx, sy
+                                continue
+
+                            if self._was_pinching:
+                                if self._scroll_tracker.end():
+                                    if not self._tracking_paused:
+                                        if (now - self._last_point_time) < 0.35:
+                                            self.click.emit(self._last_sx, self._last_sy)
+                                        else:
+                                            self.click.emit(ix, iy)
+                                self._was_pinching = False
+
+
+                            # ── Point ──────────
+                            if gesture == Gesture.POINT:
+                                self._last_point_time = now
+                                
+                                # Relative Mode Logic
                                 if self.settings.get("hand_relative_mode", False):
                                     if not self._is_point_anchored:
                                         self._is_point_anchored = True
+                                        # Don't move on first frame, just set anchor
                                     else:
+                                        # nx/ny are 0..1, convert distance to pixels via sensitivity
                                         sens = float(self.settings.get("hand_relative_sensitivity", 2.0))
                                         dx = (sx - self._last_sx) * sens
                                         dy = (sy - self._last_sy) * sens
-                                        self.middle_pinch_rel_move.emit(dx, dy, True)
+                                        if not self._tracking_paused:
+                                            self.cursor_rel_move.emit(dx, dy)
                                 else:
                                     self._is_point_anchored = False
-                                    self.middle_pinch_move.emit(sx, sy, True) 
-
-                            self._last_sx, self._last_sy = sx, sy
-                            self._was_middle_pinching = True
-                            continue
-
-                        if self._was_middle_pinching:
-                            if not self._tracking_paused:
-                                if self.settings.get("hand_relative_mode", False):
-                                    self.middle_pinch_rel_move.emit(0, 0, False)
-                                else:
-                                    self.middle_pinch_move.emit(self._last_sx, self._last_sy, False)
-                            self._was_middle_pinching = False
-                            self._is_point_anchored = False # Reset anchor on release
-
-                        # ── Calibration ──────────────────────────
-                        if self._calib_state > 0 and gesture == Gesture.PINCH_START:
-                            if self._calib_state == 1:
-                                self._calib_tl = (ix, iy)
-                                self._calib_state = 2
-                                time.sleep(0.5)
-                            elif self._calib_state == 2:
-                                tl_x, tl_y = self._calib_tl
-                                bx, by = max(tl_x, ix), max(tl_y, iy)
-                                tx, ty = min(tl_x, ix), min(tl_y, iy)
-                                self.settings.update({
-                                    "hand_point_x": tx, "hand_point_y": ty,
-                                    "hand_point_w": max(0.1, bx - tx), "hand_point_h": max(0.1, by - ty)
-                                })
-                                self._calib_state = 0
-                                time.sleep(0.5)
-                            continue
-
-                        # ── Scroll / Click ──────────────────────────────
-                        if gesture == Gesture.PINCH_START:
-                            pinch_y = (hand[4].y + hand[8].y) / 2
-                            if not self._was_pinching:
-                                self._scroll_tracker.begin(pinch_y)
-                                self._was_pinching = True
-                            else:
-                                live_sensitivity = float(self.settings.get("hand_scroll_sensitivity", 2500))
-                                delta = self._scroll_tracker.update(pinch_y, sensitivity=live_sensitivity)
-                                if self._scroll_tracker.total_moved > 15:
-                                    if abs(delta) > 0.5 and not self._tracking_paused: 
-                                        self.scroll.emit(delta)
-                            self._last_sx, self._last_sy = sx, sy
-                            continue
-
-                        if self._was_pinching:
-                            if self._scroll_tracker.end():
-                                if not self._tracking_paused:
-                                    if (now - self._last_point_time) < 0.35:
-                                        self.click.emit(self._last_sx, self._last_sy)
-                                    else:
-                                        self.click.emit(ix, iy)
-                            self._was_pinching = False
-
-
-                        # ── Point ──────────
-                        if gesture == Gesture.POINT:
-                            self._last_point_time = now
-                            
-                            # Relative Mode Logic
-                            if self.settings.get("hand_relative_mode", False):
-                                if not self._is_point_anchored:
-                                    self._is_point_anchored = True
-                                    # Don't move on first frame, just set anchor
-                                else:
-                                    # nx/ny are 0..1, convert distance to pixels via sensitivity
-                                    sens = float(self.settings.get("hand_relative_sensitivity", 2.0))
-                                    dx = (sx - self._last_sx) * sens
-                                    dy = (sy - self._last_sy) * sens
                                     if not self._tracking_paused:
-                                        self.cursor_rel_move.emit(dx, dy)
+                                        self.cursor_move.emit(sx, sy)
+                                        
+                                self._last_sx, self._last_sy = sx, sy
+                                continue
                             else:
                                 self._is_point_anchored = False
-                                if not self._tracking_paused:
-                                    self.cursor_move.emit(sx, sy)
-                                    
-                            self._last_sx, self._last_sy = sx, sy
-                            continue
-                        else:
-                            self._is_point_anchored = False
 
                 # ── Global UI Drawing & Preview Emission (Outside Loop) ──
                 
@@ -1346,6 +1468,8 @@ class HandTrackingWorker(QThread):
                     state.last_discrete_gesture = gesture
                     self._last_gesture = gesture
 
+
+
                 last_proc_time = now
 
 
@@ -1387,12 +1511,18 @@ class HandTracker(QObject):
     middle_pinch_rel_move = pyqtSignal(float, float, bool)
     # Relative movement: (dx, dy)
     cursor_rel_move      = pyqtSignal(float, float)
+    
+    # Sign Language: (full, word, letter)
+    sign_update          = pyqtSignal(str, str, str)
+    hand_pos_update      = pyqtSignal(float, float)
+    mode_changed         = pyqtSignal(str)
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
         self._sys_manager = SystemGestureManager()
         self._worker: Optional[HandTrackingWorker] = None
+        self._symbol_mode = False
 
     def reload_system_gestures(self):
         self._sys_manager.load()
@@ -1416,6 +1546,12 @@ class HandTracker(QObject):
         self._worker.middle_pinch_rel_move.connect(self.middle_pinch_rel_move, Qt.ConnectionType.DirectConnection)
         self._worker.error.connect(self.error)
         self._worker.frame_processed.connect(self.frame_processed)
+        self._worker.mode_changed.connect(self._on_mode_changed)
+        
+        # Sign Language connections
+        self._worker.sign_update.connect(self.sign_update)
+        self._worker.hand_pos_update.connect(self.hand_pos_update)
+        
         self._worker.start(QThread.Priority.HighPriority)
         logger.info(f"HandTracker: Worker started (Priority: High)")
 
@@ -1449,9 +1585,29 @@ class HandTracker(QObject):
     def is_running(self) -> bool:
         return bool(self._worker and self._worker.isRunning())
 
+    def set_symbol_mode(self, enabled: bool):
+        # This is now handled by the unified tracking_mode in the worker.
+        # We keep this for UI compatibility if needed, but it should ideally trigger a mode shift.
+        if self._worker:
+            new_mode = "SYMBOL" if enabled else "STASIS"
+            self._worker._tracking_mode = new_mode
+            self._symbol_mode = enabled
+            logger.info(f"HandTracker: Symbol Mode set to {enabled} (Mode: {new_mode})")
+
+    def _on_mode_changed(self, new_mode: str):
+        self._symbol_mode = (new_mode == "SYMBOL")
+        self.mode_changed.emit(new_mode)
+        logger.info(f"HandTracker: Synced mode to {new_mode}")
+
     def _on_gesture(self, gesture_str: str, x: float, y: float, side: str = ""):
         self.gesture.emit(gesture_str, x, y)
         
+        # Suppress system gestures if NOT in STASIS Mode
+        # The exception is the Left Fist which is used for cycling and permitted in all modes
+        if self._worker and self._worker._tracking_mode != "STASIS":
+            if not (gesture_str == "fist" and side == "Left"):
+                return
+            
         # 1. Check System Gesture Mapping
         sys_data = self._sys_manager.get_action_for_gesture(gesture_str, side)
         if sys_data and sys_data.get("enabled", True):
