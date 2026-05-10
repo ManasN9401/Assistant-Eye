@@ -347,8 +347,8 @@ class HandTrackingWorker(QThread):
     middle_pinch_rel_move = pyqtSignal(float, float, bool)
     # (dx, dy) - for trackpad-style relative movement
     cursor_rel_move = pyqtSignal(float, float)
-    # (full_translation, current_word, current_letter)
-    sign_update = pyqtSignal(str, str, str)
+    # (full_translation, current_word, current_letter, is_paused)
+    sign_update = pyqtSignal(str, str, str, bool)
     # (x_norm, y_norm) - for hand label positioning
     hand_pos_update = pyqtSignal(float, float)
     # (new_mode) — STASIS, SKETCH, SYMBOL
@@ -398,6 +398,8 @@ class HandTrackingWorker(QThread):
         self._persistence_threshold = float(self.settings.get("hand_persistence_seconds", 0.1))
         self._is_point_anchored = False
         self._synergy_start_time = 0.0
+        self._translation_paused = False
+        self._both_palms_fired = False
         self._synergy_trail = deque(maxlen=30)
         self._last_synergy_dur = 0.0
         self._explosion_start = 0.0
@@ -688,6 +690,15 @@ class HandTrackingWorker(QThread):
                     global_gesture = classify_gesture(raw_lms)
                     if global_gesture not in [Gesture.CLAP, Gesture.BOTH_PALMS]:
                         global_gesture = None
+                
+                # BOTH_PALMS Toggle Logic (Discrete)
+                if global_gesture == Gesture.BOTH_PALMS:
+                    if not self._both_palms_fired:
+                        self._translation_paused = not self._translation_paused
+                        self._both_palms_fired = True
+                        logger.info(f"HandTracker: Translation paused: {self._translation_paused}")
+                else:
+                    self._both_palms_fired = False
 
                 # ── Mode Cycling Reset if Left hand lost ──
                 if not any(side == "Left" for side, _, _ in processed_hands):
@@ -718,7 +729,10 @@ class HandTrackingWorker(QThread):
                         final_raw = pose_match
                     
                     # ── TRACKING MODE CYCLING ──
-                    if side == "Left" and final_raw == Gesture.FIST:
+                    # ONLY allow cycling if paused (when in SYMBOL mode)
+                    is_paused_or_not_symbol = (self._tracking_mode != "SYMBOL" or self._translation_paused)
+                    
+                    if side == "Left" and final_raw == Gesture.FIST and is_paused_or_not_symbol:
                         if self._fist_hold_start == 0.0:
                             self._fist_hold_start = now
                         
@@ -745,8 +759,10 @@ class HandTrackingWorker(QThread):
                     # ── MODE-SPECIFIC CONTROLS & HUD ──
                     if self._tracking_mode == "SYMBOL":
                         # Recognition
+                        self._sign_translator.paused = self._translation_paused
+                        conf_dur = self.settings.get("sign_confirm_seconds", 0.6)
+                        
                         letter = ASLRecognizer.recognize(hand)
-                        res = self._sign_translator.update(letter)
                         
                         # Only emit updates from the dominant hand to avoid text flickering
                         # (Right hand has priority, or first hand if single)
@@ -754,12 +770,13 @@ class HandTrackingWorker(QThread):
                         if is_dominant:
                             # Pass tip position for movement tracking (e.g. for letter 'Z')
                             tip_pos = (hand[8].x, hand[8].y)
-                            res = self._sign_translator.update(letter, tip_pos)
-                            self.sign_update.emit(res["full"], res["word"], res.get("letter", letter or ""))
+                            res = self._sign_translator.update(letter, tip_pos, conf_dur)
+                            is_paused = (res.get("event") == "paused")
+                            self.sign_update.emit(res["full"], res["word"], res.get("letter", letter or ""), is_paused)
                             self.hand_pos_update.emit(hand[8].x, hand[8].y)
                         else:
                             # Just update the translator state without emitting (to track movement on both hands if needed)
-                            res = self._sign_translator.update(letter, (hand[8].x, hand[8].y))
+                            res = self._sign_translator.update(letter, (hand[8].x, hand[8].y), conf_dur)
 
                         # Visual feedback (Iron Man HUD style Scouter)
                         # ONLY if the global Rectangular HUD is OFF
@@ -793,11 +810,15 @@ class HandTrackingWorker(QThread):
                                     t_size = cv2.getTextSize(letter, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)[0]
                                     tx = bx1 + (box_w - t_size[0]) // 2
                                     ty = by1 + (box_h + t_size[1]) // 2
-                                    # Matching Holo HUD Green (100, 255, 200)
-                                    cv2.putText(frame_rgb, letter, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 255, 200), 2, cv2.LINE_AA)
+                                    # Matching Holo HUD Green (100, 255, 200) or Red if paused
+                                    t_col = (100, 100, 255) if self._sign_translator.paused else (100, 255, 200)
+                                    cv2.putText(frame_rgb, letter, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85, t_col, 2, cv2.LINE_AA)
                                 else:
                                     # Scan indicator
                                     cv2.putText(frame_rgb, "...", (bx1+12, by1+28), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 125, 135), 1, cv2.LINE_AA)
+                                
+                                if self._sign_translator.paused:
+                                    cv2.putText(frame_rgb, "PAUSED - FIST TO CYCLE", (bx1, by2 + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 255), 1, cv2.LINE_AA)
                                 
                                 # 4. Connector
                                 cv2.line(frame_rgb, (hx, hy), (bx1 if hx < bx1 else bx2, by2), (90, 95, 105), 1, cv2.LINE_AA)
@@ -1512,8 +1533,8 @@ class HandTracker(QObject):
     # Relative movement: (dx, dy)
     cursor_rel_move      = pyqtSignal(float, float)
     
-    # Sign Language: (full, word, letter)
-    sign_update          = pyqtSignal(str, str, str)
+    # Sign Language: (full, word, letter, is_paused)
+    sign_update          = pyqtSignal(str, str, str, bool)
     hand_pos_update      = pyqtSignal(float, float)
     mode_changed         = pyqtSignal(str)
 
@@ -1616,7 +1637,8 @@ class HandTracker(QObject):
             
             # Map system actions to high-level signals
             if action == "toggle_overlay":
-                self.action_open_overlay.emit()
+                if side == "Right":
+                    self.action_open_overlay.emit()
             elif action == "close_overlay":
                 self.action_close_overlay.emit()
             elif action == "confirm":

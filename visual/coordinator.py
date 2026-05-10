@@ -318,9 +318,9 @@ class VisualCoordinator(QObject):
         self.status.emit(f"Pose detected: {name}")
         self.execute_custom_action.emit(action, params)
 
-    def _on_sign_update(self, full, word, letter):
+    def _on_sign_update(self, full, word, letter, paused):
         if self._sign_overlay:
-            self._sign_overlay.update_translation(full, word, letter)
+            self._sign_overlay.update_translation(full, word, letter, paused)
 
     def _on_hand_pos_update(self, x, y):
         # We no longer use a separate desktop-wide hand label overlay.
@@ -369,11 +369,8 @@ class VisualCoordinator(QObject):
         
         if not self._sign_overlay:
             self._sign_overlay = SignLanguageOverlay()
-        if not self._hand_label:
-            self._hand_label = HandLabelOverlay()
             
         self._sign_overlay.show()
-        self._hand_label.show()
         self.sign_language_active_changed.emit(True)
         self.status.emit("Sign language translation active")
 
@@ -381,7 +378,6 @@ class VisualCoordinator(QObject):
         self.sign_language_active = False
         self.hand_tracker.set_symbol_mode(False)
         if self._sign_overlay: self._sign_overlay.hide()
-        if self._hand_label: self._hand_label.hide()
         self.sign_language_active_changed.emit(False)
         self.status.emit("Sign language translation stopped")
 

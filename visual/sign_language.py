@@ -9,6 +9,10 @@ class ASLRecognizer:
     """
     
     @staticmethod
+    def _dist(a, b):
+        return np.linalg.norm(np.array([a.x - b.x, a.y - b.y]))
+
+    @staticmethod
     def recognize(lms) -> Optional[str]:
         if not lms: return None
         
@@ -89,21 +93,20 @@ class ASLRecognizer:
 
         # Fists (A, S, T, N, M, E)
         if not any(ext):
-            # E: All tips tucked tight above MCPs
-            if all(lms[i].y > lms[i-2].y for i in [8, 12, 16, 20]): # Tips below PIPs but not fully out
+            # E: Tips are tight but not covering thumb
+            if all(lms[i].y > lms[i-1].y for i in [8, 12, 16, 20]) and d(4, 8) > 0.1:
                  return "E"
             
-            # S: Thumb over fingers
-            if d(4, 10) < 0.07: return "S"
-            # T: Thumb under Index
-            if d(4, 6) < 0.06: return "T"
-            # N: Thumb under Middle
-            if d(4, 10) < 0.06: return "N"
-            # M: Thumb under Ring
-            if d(4, 14) < 0.06: return "M"
+            # S: Thumb clearly over the middle/index fingers
+            if d(4, 10) < 0.055 or d(4, 9) < 0.055: return "S"
             
-            # A: Thumb on side
-            if thumb_out or thumb_up: return "A"
+            # T, N, M: Thumb tucked under specific fingers
+            if d(4, 6) < 0.05: return "T"  # Under Index PIP
+            if d(4, 10) < 0.05: return "N" # Under Middle PIP
+            if d(4, 14) < 0.05: return "M" # Under Ring PIP
+            
+            # A: Default for fist (thumb on side)
+            return "A"
 
         return None
 
@@ -121,12 +124,17 @@ class SignTranslator:
         self.translation = ""
         self.last_action_time = 0
         self.idle_timeout = 3.0 # Clear current word after 3s of nothing
+        self.paused = False
         
         # Movement tracking for 'Z'
         self.pos_buffer = [] # list of (x, y, t)
         
-    def update(self, detected_letter: Optional[str], tip_pos: Optional[tuple] = None) -> dict:
+    def update(self, detected_letter: Optional[str], tip_pos: Optional[tuple] = None, confirm_duration: float = 0.6) -> dict:
+        self.confirm_duration = confirm_duration
         now = time.time()
+        
+        if self.paused:
+            return {"event": "paused", "letter": detected_letter, "word": self.current_word, "full": self.translation}
         
         # Track movement for Z and J
         if tip_pos:

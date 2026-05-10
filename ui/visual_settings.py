@@ -121,7 +121,7 @@ class VisualSettingsPage(QWidget):
         vb.addWidget(_label("Scroll sensitivity", "label-field"))
         sens_row = QHBoxLayout()
         self._scroll_sens = NoScrollSlider(Qt.Orientation.Horizontal)
-        self._scroll_sens.setRange(500, 8000)  # wheel-delta units per normalised unit of movement
+        self._scroll_sens.setRange(500, 8000)
         self._scroll_sens.setValue(int(self.settings.get("hand_scroll_sensitivity", 2500)))
         self._sens_lbl = QLabel(str(self._scroll_sens.value()))
         self._sens_lbl.setObjectName("label-mono")
@@ -135,6 +135,19 @@ class VisualSettingsPage(QWidget):
         self._relative_mode.setChecked(self.settings.get("hand_relative_mode", False))
         self._relative_mode.setToolTip("Cursor moves relative to hand movement instead of snapping to camera coordinates.")
         vb.addWidget(self._relative_mode)
+
+        vb.addWidget(_label("Sign Language Confirmation Delay", "label-field"))
+        sign_delay_row = QHBoxLayout()
+        self._sign_delay = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._sign_delay.setRange(2, 30) # 0.2s to 3.0s
+        self._sign_delay.setValue(int(self.settings.get("sign_confirm_seconds", 0.6) * 10))
+        self._sign_delay_lbl = QLabel(f"{self._sign_delay.value() / 10:.1f}s")
+        self._sign_delay_lbl.setObjectName("label-mono")
+        self._sign_delay_lbl.setFixedWidth(40)
+        self._sign_delay.valueChanged.connect(lambda v: self._sign_delay_lbl.setText(f"{v/10:.1f}s"))
+        sign_delay_row.addWidget(self._sign_delay)
+        sign_delay_row.addWidget(self._sign_delay_lbl)
+        vb.addLayout(sign_delay_row)
 
         vb.addWidget(_label("Relative cursor sensitivity", "label-field"))
         rel_sens_row = QHBoxLayout()
@@ -329,6 +342,7 @@ class VisualSettingsPage(QWidget):
             "hand_scroll_sensitivity": self._scroll_sens.value(),
             "hand_tracking_active":   self._hand_enable.isChecked(),
             "sign_language_active":   self._sign_enable.isChecked(),
+            "sign_confirm_seconds":   self._sign_delay.value() / 10.0,
             "eye_tracking_active":    self._eye_enable.isChecked(),
             "eye_dwell_sec":          self._dwell.value() / 10.0,
             "hand_point_x":           self._hx.value() / 100.0,
