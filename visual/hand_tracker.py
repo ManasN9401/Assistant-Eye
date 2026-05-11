@@ -693,10 +693,14 @@ class HandTrackingWorker(QThread):
                 
                 # BOTH_PALMS Toggle Logic (Discrete)
                 if global_gesture == Gesture.BOTH_PALMS:
-                    if not self._both_palms_fired:
-                        self._translation_paused = not self._translation_paused
+                    if self._tracking_mode == "SYMBOL":
+                        if not self._both_palms_fired:
+                            last_bp_toggle = getattr(self, "_last_bp_toggle", 0.0)
+                            if now - last_bp_toggle > 2.0: # 2 second cooldown
+                                self._translation_paused = not self._translation_paused
+                                self._last_bp_toggle = now
+                                logger.info(f"HandTracker: Translation paused: {self._translation_paused}")
                         self._both_palms_fired = True
-                        logger.info(f"HandTracker: Translation paused: {self._translation_paused}")
                 else:
                     self._both_palms_fired = False
 
@@ -778,51 +782,6 @@ class HandTrackingWorker(QThread):
                             # Just update the translator state without emitting (to track movement on both hands if needed)
                             res = self._sign_translator.update(letter, (hand[8].x, hand[8].y), conf_dur)
 
-                        # Visual feedback (Iron Man HUD style Scouter)
-                        # ONLY if the global Rectangular HUD is OFF
-                        if not self.settings.get("hand_fx_hud", False):
-                            hx, hy = int(hand[8].x * w), int(hand[8].y * h)
-                            box_w, box_h = 42, 42
-                            bx1, by1 = hx + 20, hy - 60
-                            bx2, by2 = bx1 + box_w, by1 + box_h
-                            
-                            # Bounds check
-                            bx1, bx2 = max(0, min(bx1, w-box_w)), max(box_w, min(bx2, w))
-                            by1, by2 = max(0, min(by1, h-box_h)), max(box_h, min(by2, h))
-
-                            # Draw Scouter UI
-                            if bx1 < bx2 and by1 < by2:
-                                # 1. Background (More transparent)
-                                sub_rect = frame_rgb[by1:by2, bx1:bx2]
-                                bg_rect = np.full_like(sub_rect, (30, 32, 35), dtype=np.uint8)
-                                frame_rgb[by1:by2, bx1:bx2] = cv2.addWeighted(sub_rect, 0.85, bg_rect, 0.15, 0)
-                                
-                                # 2. Minimal border & brackets
-                                cv2.rectangle(frame_rgb, (bx1, by1), (bx2, by2), (90, 95, 105), 1, cv2.LINE_AA)
-                                brk = 8
-                                cv2.line(frame_rgb, (bx1, by1), (bx1+brk, by1), (200, 205, 215), 1)
-                                cv2.line(frame_rgb, (bx1, by1), (bx1, by1+brk), (200, 205, 215), 1)
-                                cv2.line(frame_rgb, (bx2, by2), (bx2-brk, by2), (200, 205, 215), 1)
-                                cv2.line(frame_rgb, (bx2, by2), (bx2, by2-brk), (200, 205, 215), 1)
-
-                                # 3. Text (Letter) if recognized
-                                if letter:
-                                    t_size = cv2.getTextSize(letter, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)[0]
-                                    tx = bx1 + (box_w - t_size[0]) // 2
-                                    ty = by1 + (box_h + t_size[1]) // 2
-                                    # Matching Holo HUD Green (100, 255, 200) or Red if paused
-                                    t_col = (100, 100, 255) if self._sign_translator.paused else (100, 255, 200)
-                                    cv2.putText(frame_rgb, letter, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.85, t_col, 2, cv2.LINE_AA)
-                                else:
-                                    # Scan indicator
-                                    cv2.putText(frame_rgb, "...", (bx1+12, by1+28), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 125, 135), 1, cv2.LINE_AA)
-                                
-                                if self._sign_translator.paused:
-                                    cv2.putText(frame_rgb, "PAUSED - FIST TO CYCLE", (bx1, by2 + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 255), 1, cv2.LINE_AA)
-                                
-                                # 4. Connector
-                                cv2.line(frame_rgb, (hx, hy), (bx1 if hx < bx1 else bx2, by2), (90, 95, 105), 1, cv2.LINE_AA)
-
                     elif self._tracking_mode == "SKETCH" and self.settings.get("hand_fx_trails", True):
                         if side == "Left":
                             # Clear Workspace: Left Pinch
@@ -863,31 +822,28 @@ class HandTrackingWorker(QThread):
 
                     # 5. Smooth coordinates (Primary tracking hand)
                     dt_proc = max(now - last_proc_time, 0.001)
-                    if side == "Right":
-                        if not self._oef_active:
-                            self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
-                        sx = self._oef_x.filter(nx, dt_proc)
-                        sy = self._oef_y.filter(ny, dt_proc)
-                    else:
-                        sx, sy = nx, ny  # Fallback for left hand (not used for cursor)
-
                     if not is_ghost:
                         # ── Base landmarks (Transparent) ─────────────────────
-                        # HIDE individual landmarks if synergy is active (Fusion) OR during Overload
                         is_overload = now < self._overload_end
-                        if not synergy_active and not is_overload:
-                            if self._sketch_mode and side == "Right":
-                                base_color = self._sketch_colors[self._color_idx][1]
-                            else:
-                                base_color = (220, 55, 55) if side == "Right" else (55, 100, 220)
+                        if not synergy_active:
+                            base_color = (220, 55, 55) if side == "Right" else (55, 100, 220)
                             overlay = frame_rgb.copy()
                             for lm in hand:
-                                # Skip drawing landmarks if they are extremely close to the cursor/index to prevent "double markers"
                                 jx, jy = int(lm.x * w), int(lm.y * h)
                                 cv2.circle(overlay, (jx, jy), 5, tuple(int(c * 0.3) for c in base_color), -1, cv2.LINE_AA)
                                 cv2.circle(overlay, (jx, jy), 2, base_color, -1, cv2.LINE_AA)
-                            cv2.addWeighted(overlay, 0.4, frame_rgb, 0.6, 0, frame_rgb)
-                        
+                            
+                            lm_opacity = 0.4
+                            if is_overload:
+                                time_left = self._overload_end - now
+                                if time_left > 2.0:
+                                    lm_opacity = 0.0
+                                else:
+                                    lm_opacity = 0.4 * (1.0 - (time_left / 2.0))
+                                    
+                            if lm_opacity > 0.01:
+                                cv2.addWeighted(overlay, lm_opacity, frame_rgb, 1.0 - lm_opacity, 0, frame_rgb)
+
                         # ── PLASMA ORB V4 (Working Version) ──────────────────
                         if synergy_dur > 0 and side == "Right":
                             # Use fusion midpoint for centering if available
@@ -921,7 +877,7 @@ class HandTrackingWorker(QThread):
                                     spy = cy + int(math.sin(s_angle) * s_dist)
                                     if 0 <= spx < w and 0 <= spy < h:
                                         cv2.circle(frame_rgb, (spx, spy), random.randint(1, 2), (255, 240, 255), -1, cv2.LINE_AA)
-
+                            
                             # F. Lightning / Electrical Discharge
                             if synergy_dur > 1.0:
                                 for _ in range(2):
@@ -959,55 +915,48 @@ class HandTrackingWorker(QThread):
                                 shock_r = int(((now * 2.0) % 1.0) * w * 1.5)
                                 cv2.circle(frame_rgb, (cx, cy), shock_r, (255, 255, 255), 2, cv2.LINE_AA)
 
-                        g_display = gesture if isinstance(gesture, str) else gesture.value
-                        label = f"{side[0].upper()}  {g_display}"
-                        l_font, l_sc, l_th = cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1
-                        (tw, th), baseline = cv2.getTextSize(label, l_font, l_sc, l_th)
-                        lx, ly = 18, 12
-                        if i > 0: ly += 30 # Offset subsequent hand labels vertically
-                        
-                        # Frosted background
-                        hx1, hy1, hx2, hy2 = lx - 8, ly, lx + tw + 8, ly + th + 10
-                        sub_l = frame_rgb[hy1:hy2, hx1:hx2]
-                        rect_l = sub_l.copy()
-                        cv2.rectangle(rect_l, (0,0), (hx2-hx1, hy2-hy1), (18, 20, 25), -1)
-                        cv2.addWeighted(rect_l, 0.5, sub_l, 0.5, 0, sub_l)
-                        
-                        cv2.putText(frame_rgb, label, (lx, ly + th + 3),
-                                    l_font, l_sc, (220, 230, 240), l_th, cv2.LINE_AA)
-
-                        tip_px = int(hand[8].x * w)
-                        tip_py = int(hand[8].y * h)
+                        # ── HOLO HUD ────────────────
+                        if self.settings.get("hand_fx_hud", False) and not synergy_active:
+                            # Bounding box around hand
+                            xs = [int(lm.x * w) for lm in hand]
+                            ys = [int(lm.y * h) for lm in hand]
+                            bx1, by1 = max(0, min(xs) - 18), max(0, min(ys) - 18)
+                            bx2, by2 = min(w, max(xs) + 18), min(h, max(ys) + 18)
+                            hud_col = (100, 255, 200)
+                            bracket = 16
+                            # TL
+                            cv2.line(frame_rgb, (bx1, by1), (bx1 + bracket, by1), hud_col, 2)
+                            cv2.line(frame_rgb, (bx1, by1), (bx1, by1 + bracket), hud_col, 2)
+                            # TR
+                            cv2.line(frame_rgb, (bx2, by1), (bx2 - bracket, by1), hud_col, 2)
+                            cv2.line(frame_rgb, (bx2, by1), (bx2, by1 + bracket), hud_col, 2)
+                            # BL
+                            cv2.line(frame_rgb, (bx1, by2), (bx1 + bracket, by2), hud_col, 2)
+                            cv2.line(frame_rgb, (bx1, by2), (bx1, by2 - bracket), hud_col, 2)
+                            # BR
+                            cv2.line(frame_rgb, (bx2, by2), (bx2 - bracket, by2), hud_col, 2)
+                            cv2.line(frame_rgb, (bx2, by2), (bx2, by2 - bracket), hud_col, 2)
+                            
+                            # Side label
+                            hud_text = f"{side[0]}: {gesture if isinstance(gesture, str) else gesture.value} [{self._tracking_mode}]"
+                            if self._tracking_mode == "SYMBOL":
+                                sym = ASLRecognizer.recognize(hand)
+                                if sym:
+                                    hud_text += f" > '{sym}'"
+                                if getattr(self, "_translation_paused", False):
+                                    hud_text += " (PAUSED)"
+                                    
+                            cv2.putText(frame_rgb, hud_text, (bx1, max(12, by1 - 6)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, hud_col, 1, cv2.LINE_AA)
 
                         # ── PARTICLE TRAILS ──────────────
                         if self.settings.get("hand_fx_trails", True):
+                            tip_px = int(hand[8].x * w)
+                            tip_py = int(hand[8].y * h)
                             # In Fusion mode, we use a separate centralized trail logic
                             if synergy_dur > 0:
-                                # We only draw this ONCE when on the Right hand pass to avoid duplicates
-                                if side == "Right" and len(self._synergy_trail) > 1:
-                                    s_pts = list(self._synergy_trail)
-                                    overlay_t = frame_rgb.copy()
-                                    tr = (240, 80, 255)
-                                    t_scale = synergy_growth * (1.0 + synergy_pulse * 0.15)
-                                    brightness_mod = 0.8 + (synergy_pulse * 0.2)
-                                    
-                                    for ti in range(1, len(s_pts)):
-                                        age = now - s_pts[ti][2]
-                                        if age > 0.6: continue
-                                        alpha = max(0.0, 1.0 - age / 0.6)
-                                        p1, p2 = (s_pts[ti-1][0], s_pts[ti-1][1]), (s_pts[ti][0], s_pts[ti][1])
-                                        
-                                        # Passes on overlay
-                                        c1 = tuple(int(c * alpha * 0.25) for c in tr)
-                                        cv2.line(overlay_t, p1, p2, c1, max(1, int(20 * t_scale * alpha)), cv2.LINE_AA)
-                                        c2 = tuple(int(c * alpha * 0.60 * brightness_mod) for c in tr)
-                                        cv2.line(overlay_t, p1, p2, c2, max(1, int(10 * t_scale * alpha)), cv2.LINE_AA)
-                                        c3 = tuple(int(min(255, c * brightness_mod * 1.5)) for c in tr)
-                                        cv2.line(overlay_t, p1, p2, c3, max(1, int(4 * t_scale * alpha)), cv2.LINE_AA)
-                                        if synergy_pulse > 0.6:
-                                            cv2.line(overlay_t, p1, p2, (255, 200, 255), 1, cv2.LINE_AA)
-                                    
-                                    cv2.addWeighted(overlay_t, 0.5, frame_rgb, 0.5, 0, frame_rgb)
+                                pass # Synergy trails disabled to remove the purple orb at the index finger
+
                             else:
                                 state.trail.append((tip_px, tip_py, now))
                                 pts = list(state.trail)
@@ -1022,8 +971,8 @@ class HandTrackingWorker(QThread):
                                         if age > 0.55: continue
                                         alpha = max(0.0, 1.0 - age / 0.55)
                                         p1, p2 = (pts[ti-1][0], pts[ti-1][1]), (pts[ti][0], pts[ti][1])
-                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha * 0.25) for c in tr), max(1, int(15 * alpha)), cv2.LINE_AA)
-                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha) for c in tr), max(1, int(3 * alpha)), cv2.LINE_AA)
+                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha * 0.7) for c in tr), max(1, int(12 * alpha)), cv2.LINE_AA)
+                                        cv2.line(overlay_st, p1, p2, tuple(int(c * alpha) for c in tr), max(1, int(4 * alpha)), cv2.LINE_AA)
                                     cv2.addWeighted(overlay_st, 0.5, frame_rgb, 0.5, 0, frame_rgb)
                                 
                                 # ── POST-EXPLOSION OVERLOAD (Deep Lifecycle) ──────
@@ -1101,10 +1050,10 @@ class HandTrackingWorker(QThread):
                                                 state.multi_trails[t_idx].append((t_px, t_py, now))
                                                 f_pts = list(state.multi_trails[t_idx])
                                             
-                                            # Thickness Morph: 15px -> 3px
+                                            # Thickness Morph: 15px -> 10px (matches landmarker size)
                                             base_w = 15
                                             if time_left < 3.0:
-                                                base_w = 3 + (12 * (time_left / 3.0))
+                                                base_w = 10 + (5 * (time_left / 3.0))
                                             
                                             for ti in range(1, len(f_pts)):
                                                 p1, p2 = (f_pts[ti-1][0], f_pts[ti-1][1]), (f_pts[ti][0], f_pts[ti][1])
@@ -1126,100 +1075,20 @@ class HandTrackingWorker(QThread):
                                     if ol_weight > 0.01:
                                         cv2.addWeighted(overlay_ol, ol_weight, frame_rgb, 1.0 - ol_weight, 0, frame_rgb)
 
-                        # ── FOCUS PULSE ───────────────
-                        if self.settings.get("hand_fx_pulse", True) and not synergy_active:
-                            # Trigger a pulse on pinch start (transition into PINCH_START)
-                            if gesture == Gesture.PINCH_START and state.pulse_start == 0.0:
-                                state.pulse_start = now
-                            elif gesture != Gesture.PINCH_START:
-                                state.pulse_start = 0.0
 
-                            if state.pulse_start > 0.0:
-                                elapsed = now - state.pulse_start
-                                max_r = 55
-                                r = int(max_r * min(elapsed / 0.5, 1.0))
-                                alpha_fade = max(0.0, 1.0 - elapsed / 0.5)
-                                pulse_col = (
-                                    int(255 * alpha_fade),
-                                    int(200 * alpha_fade),
-                                    int(80 * alpha_fade)
-                                )
-                                if r > 0 and alpha_fade > 0.05:
-                                    pinch_cx = int((hand[4].x + hand[8].x) / 2 * w)
-                                    pinch_cy = int((hand[4].y + hand[8].y) / 2 * h)
-                                    cv2.circle(frame_rgb, (pinch_cx, pinch_cy), r, pulse_col, 2, cv2.LINE_AA)
-
-                        # ── HOLO HUD ────────────────
-                        if self.settings.get("hand_fx_hud", False) and not synergy_active:
-                            # Bounding box around hand
-                            xs = [int(lm.x * w) for lm in hand]
-                            ys = [int(lm.y * h) for lm in hand]
-                            bx1, by1 = max(0, min(xs) - 18), max(0, min(ys) - 18)
-                            bx2, by2 = min(w, max(xs) + 18), min(h, max(ys) + 18)
-                            hud_col = (100, 255, 200)
-                            bracket = 16
-                            # TL
-                            cv2.line(frame_rgb, (bx1, by1), (bx1 + bracket, by1), hud_col, 2)
-                            cv2.line(frame_rgb, (bx1, by1), (bx1, by1 + bracket), hud_col, 2)
-                            # TR
-                            cv2.line(frame_rgb, (bx2, by1), (bx2 - bracket, by1), hud_col, 2)
-                            cv2.line(frame_rgb, (bx2, by1), (bx2, by1 + bracket), hud_col, 2)
-                            # BL
-                            cv2.line(frame_rgb, (bx1, by2), (bx1 + bracket, by2), hud_col, 2)
-                            cv2.line(frame_rgb, (bx1, by2), (bx1, by2 - bracket), hud_col, 2)
-                            # BR
-                            cv2.line(frame_rgb, (bx2, by2), (bx2 - bracket, by2), hud_col, 2)
-                            cv2.line(frame_rgb, (bx2, by2), (bx2, by2 - bracket), hud_col, 2)
-                            
-                            # SYMBOL Mode Integration
-                            if self._tracking_mode == "SYMBOL":
-                                letter = ASLRecognizer.recognize(hand)
-                                if letter:
-                                    # Scouter-box style container on the side
-                                    s_box_w, s_box_h = 42, 42
-                                    sbx1, sby1 = bx2 + 5, (by1 + by2 - s_box_h) // 2
-                                    sbx2, sby2 = sbx1 + s_box_w, sby1 + s_box_h
-                                    
-                                    # Background
-                                    if sbx2 < w:
-                                        overlay = frame_rgb.copy()
-                                        cv2.rectangle(overlay, (sbx1, sby1), (sbx2, sby2), (30, 32, 35), -1)
-                                        cv2.addWeighted(overlay, 0.15, frame_rgb, 0.85, 0, frame_rgb)
-                                        cv2.rectangle(frame_rgb, (sbx1, sby1), (sbx2, sby2), (90, 95, 105), 1, cv2.LINE_AA)
-                                        
-                                        # Letter (Matching Holo HUD Green)
-                                        t_sz = cv2.getTextSize(letter, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)[0]
-                                        cv2.putText(frame_rgb, letter, (sbx1 + (s_box_w - t_sz[0]) // 2, sby1 + (s_box_h + t_sz[1]) // 2),
-                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 255, 200), 2, cv2.LINE_AA)
-                            
-                            # Side label (gesture + mode)
-                            hud_text = f"{side[0]}: {g_display} [{self._tracking_mode}]"
-                            cv2.putText(frame_rgb, hud_text, (bx1, max(12, by1 - 6)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, hud_col, 1, cv2.LINE_AA)
-                                        
-                            # Mode Cycling Hint
-                            if side == "Left":
-                                cv2.putText(frame_rgb, "LFist (1s): Cycle Mode", (bx1, by2 + 16),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
-                                        
-                            # Sketch-Specific HUD (Contextual Hints on Right Hand)
-                            if self._sketch_mode and side == "Right" and not self._symbol_mode:
-                                draw_color_name = self._sketch_colors[self._color_idx][0]
-                                draw_color_bgr = self._sketch_colors[self._color_idx][1]
-                                
-                                # Hints Label
-                                hints_label = "Tips: LVictory (Color) | LPinch (Clear)"
-                                cv2.putText(frame_rgb, hints_label, (bx1, by2 + 16),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
-                                # Color Label
-                                color_label = f"Color: {draw_color_name}"
-                                cv2.putText(frame_rgb, color_label, (bx1, by2 + 32),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, draw_color_bgr, 1, cv2.LINE_AA)
-
+                    if side == "Right":
+                        if not self._oef_active:
+                            self._oef_x.reset(); self._oef_y.reset(); self._oef_active = True
+                        sx = self._oef_x.filter(nx, dt_proc)
+                        sy = self._oef_y.filter(ny, dt_proc)
                     else:
+                        sx, sy = nx, ny  # Fallback for left hand (not used for cursor)
+
+                    if is_ghost:
                         # Ghost tracking indicator
                         cv2.putText(frame_rgb, f"{side[0]}  ghost", (14, 36 + i * 28),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (90, 100, 110), 1, cv2.LINE_AA)
+
                     
                     # Store variables for global UI drawing outside loop
                     last_ix, last_iy = ix, iy

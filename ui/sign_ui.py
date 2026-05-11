@@ -1,6 +1,9 @@
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPoint, pyqtSignal, QEasingCurve, QPropertyAnimation
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QFont, QPen, QBrush, QLinearGradient, QRegion
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPoint, QPointF, QSize, pyqtSignal, QEasingCurve, QPropertyAnimation
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QFont, QPen, QBrush, QLinearGradient, QRadialGradient, QRegion
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QApplication, QScrollArea
+import time
+import math
+import random
 
 class SignLanguageOverlay(QWidget):
     """
@@ -12,14 +15,17 @@ class SignLanguageOverlay(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.NoDropShadowWindowHint
+            Qt.WindowType.NoDropShadowWindowHint |
+            Qt.WindowType.ToolTip
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         
         # UI State
         self.w, self.h = 800, 140
         self.is_minimized = False
-        self.min_size = 60
+        self.min_size = 160
         self._dragging = False
         self._resizing = False
         self._drag_pos = QPoint()
@@ -61,54 +67,50 @@ class SignLanguageOverlay(QWidget):
         # Idle/Visibility timer
         self.visibility_timer = QTimer(self)
         self.visibility_timer.timeout.connect(self.update)
-        self.visibility_timer.start(500) # Check every 0.5s
+        self.visibility_timer.start(30) # High frequency for animations
         
         self.show()
         
     def toggle_minimize(self):
         self.is_minimized = not self.is_minimized
+        
+        # Animate size change
+        self.anim = QPropertyAnimation(self, b"size")
+        self.anim.setDuration(400)
+        self.anim.setEasingCurve(QEasingCurve.Type.InOutQuart)
+        
         if self.is_minimized:
             self.old_size = self.size()
             self.scroll.hide()
-            self.scroll.setFixedSize(0, 0)
             self.layout.setContentsMargins(0, 0, 0, 0)
-            self.setFixedSize(self.min_size, self.min_size)
-            # WA_TranslucentBackground uses DWM alpha compositing on Windows.
-            # SetWindowRgn (setMask) is IGNORED by DWM, so we clear any existing
-            # mask and let the alpha channel in paintEvent create the circle shape.
+            self.anim.setEndValue(QSize(self.min_size, self.min_size))
+            self.anim.finished.connect(lambda: self.setFixedSize(self.min_size, self.min_size))
             self.clearMask()
         else:
-            self.scroll.setMinimumSize(0, 0)
-            self.scroll.setMaximumSize(16777215, 16777215)
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
-            self.resize(self.old_size)
-            self.layout.setContentsMargins(20, 40, 20, 20)
             self.scroll.show()
+            self.layout.setContentsMargins(20, 40, 20, 20)
+            self.anim.setEndValue(self.old_size)
+        
+        self.anim.start()
+        
+        if self.is_minimized:
+            self.visibility_timer.setInterval(30)
+        else:
+            self.visibility_timer.setInterval(500)
         self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.is_minimized:
-            # No mask needed — WA_TranslucentBackground lets DWM alpha-composite
-            # the window. Only the ellipse drawn in paintEvent is opaque;
-            # everything outside it has alpha=0 and is invisible.
-            self.clearMask()
-        else:
-            # For the expanded dialogue box, a rounded-rect mask clips mouse events
-            # neatly to the visible area.
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(self.rect()), 4, 4)
-            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        self.clearMask()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Check for minimize button (Top Right)
             if not self.is_minimized and event.pos().x() > self.width() - 40 and event.pos().y() < 40:
                 self.toggle_minimize()
                 return
             
-            # Check for resizing (Bottom Right corner)
             if not self.is_minimized and event.pos().x() > self.width() - 20 and event.pos().y() > self.height() - 20:
                 self._resizing = True
             else:
@@ -165,7 +167,6 @@ class SignLanguageOverlay(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        import time
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -173,25 +174,35 @@ class SignLanguageOverlay(QWidget):
         is_active = (now - self.last_update_time < self.idle_timeout)
         should_be_opaque = self.is_hovered or is_active
         
-        # Set Global Window Opacity for simultaneous fading
+        # Pulse phase (0 to 1.0)
+        pulse = (math.sin(now * 3) + 1) / 2
+
         target_opacity = 0.95 if should_be_opaque else 0.2
         if abs(self.windowOpacity() - target_opacity) > 0.01:
-            # We could animate this, but for now just jump
             self.setWindowOpacity(target_opacity)
 
         if self.is_minimized:
-            # Circle
-            painter.setBrush(QBrush(QColor(30, 32, 38, 240)))
-            col = QColor(255, 80, 80) if self.is_paused else QColor(100, 255, 200)
-            painter.setPen(QPen(col, 2))
-            
-            # Draw on the masked area
-            r = self.rect().adjusted(2, 2, -2, -2)
-            painter.drawEllipse(r)
-            
-            painter.setPen(Qt.GlobalColor.white)
-            painter.setFont(QFont("Outfit", 11, QFont.Weight.Bold))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "ASL")
+            # Minimalistic Holo Circle
+            rect = QRectF(self.rect())
+            center = rect.center()
+            core_radius = 28
+            base_col = QColor(255, 110, 40) if self.is_paused else QColor(100, 255, 200)
+
+            # Core Background
+            painter.setBrush(QBrush(QColor(18, 18, 24, 230)))
+            painter.setPen(QPen(base_col, 2))
+            painter.drawEllipse(center, core_radius, core_radius)
+
+            # Subtle pulsing outer ring
+            glow_radius = core_radius + 4 + (3 * pulse)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(base_col.red(), base_col.green(), base_col.blue(), 100), 1))
+            painter.drawEllipse(center, glow_radius, glow_radius)
+
+            # Text Label
+            painter.setFont(QFont("Outfit", 12, QFont.Weight.Bold))
+            painter.setPen(base_col)
+            painter.drawText(int(center.x() - 20), int(center.y() - 10), 40, 20, Qt.AlignmentFlag.AlignCenter, "ASL")
             return
 
         # ── Expanded Mode ──────────────────
@@ -219,15 +230,9 @@ class SignLanguageOverlay(QWidget):
         painter.drawLine(self.width()-5, self.height()-15, self.width()-15, self.height()-5)
         painter.drawLine(self.width()-5, self.height()-10, self.width()-10, self.height()-5)
 
-        # ── 2. Floating Letter (Near Hand) ───────────────────
-        # Note: We need to draw this in a separate window or handle global coords
-        # Since this widget is at the bottom, we can't draw near the hand if the hand is high.
-        # So we'll use a separate tiny overlay for the "Hand Label".
-        pass
-
 class HandLabelOverlay(QWidget):
     """
-    Small floating label that follows the hand.
+    Small floating label that follows the hand with a premium 'orb' aesthetic.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -238,9 +243,14 @@ class HandLabelOverlay(QWidget):
             Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(100, 60)
+        self.resize(120, 70)
         self.text = ""
         self.active = False
+        
+        # Animation timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(30)
         
     def set_letter(self, text, active=False):
         self.text = text
@@ -256,17 +266,39 @@ class HandLabelOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Bubble
-        rect = QRectF(5, 5, 90, 50)
-        path = QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
+        now = time.time()
+        pulse = (math.sin(now * 4) + 1) / 2
         
-        col = QColor(34, 197, 94, 220) if self.active else QColor(100, 100, 255, 200)
-        painter.fillPath(path, QBrush(QColor(20, 20, 30, 200)))
-        painter.setPen(QPen(col, 2))
-        painter.drawPath(path)
+        # Bubble / Orb Background
+        rect = QRectF(5, 5, 110, 60)
+        center = rect.center()
         
-        # Letter
+        # 1. Outer Glow
+        glow_grad = QRadialGradient(center, rect.width()/2)
+        base_col = QColor(0, 255, 180) if self.active else QColor(255, 110, 40)
+        
+        glow_grad.setColorAt(0.0, base_col)
+        glow_grad.setColorAt(1.0, QColor(base_col.red(), base_col.green(), base_col.blue(), 0))
+        
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(glow_grad))
+        painter.drawEllipse(rect)
+        
+        # 2. Dense Core
+        core_grad = QRadialGradient(center, rect.width()/2.5)
+        core_grad.setColorAt(0.0, QColor(30, 30, 40, 240))
+        core_grad.setColorAt(0.8, QColor(20, 20, 30, 220))
+        core_grad.setColorAt(1.0, base_col)
+        
+        painter.setBrush(QBrush(core_grad))
+        painter.drawRoundedRect(rect.adjusted(5, 5, -5, -5), 15, 15)
+        
+        # 3. Highlight
+        painter.setPen(QPen(base_col.lighter(150), 1 + pulse))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect.adjusted(8, 8, -8, -8), 12, 12)
+        
+        # Letter Text
         painter.setPen(Qt.GlobalColor.white)
-        painter.setFont(QFont("Outfit", 24, QFont.Weight.Bold))
+        painter.setFont(QFont("Outfit", 26, QFont.Weight.ExtraBold))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text)
