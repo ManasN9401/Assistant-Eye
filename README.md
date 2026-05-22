@@ -22,7 +22,7 @@
 EYE is a powerful Python desktop assistant that transforms your browsing experience. It runs as an always-on-top, floating overlay that connects to any website, responding to voice, text, and visual cues. Control your browser with natural hand gestures, eye tracking, and even sign language.
 
 
-## ✨ Key Features at a Glance
+## Overview
 
 -  12+ Built-in Hand Gestures** — Scroll, click, drag, and navigate with natural hand motions
 -  Custom Gesture Creator** — Design and save your own hand signatures to launch apps or trigger actions
